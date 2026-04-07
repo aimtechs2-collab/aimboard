@@ -1,0 +1,543 @@
+@import "../packages/excalidraw/css/variables.module.scss";
+
+/* Global brand: soft cream “desk” (light) / warm charcoal (dark); no visible frame. */
+:root {
+  --aimtutor-page-bg: #f9f8e2;
+  --aimtutor-page-bg-dark: #15130f;
+}
+
+.excalidraw {
+  --color-primary-contrast-offset: #625ee0; // to offset Chubb illusion
+
+  &.theme--dark {
+    --color-primary-contrast-offset: #726dff; // to offset Chubb illusion
+  }
+
+  .footer-center {
+    justify-content: flex-end;
+    margin-top: auto;
+    margin-bottom: auto;
+    margin-inline-start: auto;
+  }
+
+  .encrypted-icon {
+    border-radius: var(--space-factor);
+    color: var(--color-primary);
+    margin-top: auto;
+    margin-bottom: auto;
+    margin-inline-start: auto;
+    margin-inline-end: 0.6em;
+    z-index: var(--zIndex-layerUI);
+
+    svg {
+      width: 1.2rem;
+      height: 1.2rem;
+    }
+  }
+
+  .dropdown-menu-container {
+    .dropdown-menu-item {
+      &.active-collab {
+        background-color: #ecfdf5;
+        color: #064e3c;
+      }
+      &.highlighted {
+        color: var(--color-promo);
+        font-weight: 700;
+        .dropdown-menu-item__icon g {
+          stroke-width: 2;
+        }
+      }
+    }
+  }
+
+  &.theme--dark {
+    .dropdown-menu-item {
+      &.active-collab {
+        background-color: #064e3c;
+        color: #ecfdf5;
+      }
+    }
+  }
+
+  .alert {
+    pointer-events: none;
+    position: absolute;
+    top: 6.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    text-align: center;
+    line-height: 1.5;
+    border-radius: var(--border-radius-md);
+    z-index: 6;
+    white-space: pre;
+
+    &--warning {
+      background-color: var(--color-warning);
+      color: var(--color-text-warning);
+    }
+
+    &--danger {
+      background-color: var(--color-danger-dark);
+      color: var(--color-danger-text);
+    }
+  }
+}
+
+.excalidraw-app.is-collaborating {
+  [data-testid="clear-canvas-button"] {
+    display: none;
+  }
+}
+
+.excalidraw-app {
+  position: relative;
+  box-sizing: border-box;
+  background: var(--aimtutor-page-bg);
+  min-height: 100%;
+}
+
+html.dark .excalidraw-app,
+.excalidraw-app:has(.excalidraw.theme--dark) {
+  background: var(--aimtutor-page-bg-dark);
+}
+
+/* App UI font aligned with wordmark */
+.excalidraw-app .excalidraw {
+  --ui-font:
+    "Plus Jakarta Sans", Assistant, system-ui, BlinkMacSystemFont, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Light: warm paper-like chrome, crisp canvas */
+.excalidraw-app .excalidraw:not(.theme--dark) {
+  --default-bg-color: #ffffff;
+  --island-bg-color: #fffef8;
+  --island-bg-color-alt: #fffef8;
+  --input-bg-color: #fffef8;
+  --color-surface-high: #f3f0e4;
+  --color-surface-mid: #efeae0;
+  --color-surface-low: #e8e2d4;
+  --color-surface-lowest: #fffef8;
+  --overlay-bg-color: rgba(249, 248, 226, 0.52);
+}
+
+/* Dark: warm charcoal UI on deep board */
+.excalidraw-app .excalidraw.theme--dark {
+  --default-bg-color: #121210;
+  --island-bg-color: #25231e;
+  --island-bg-color-alt: #1c1b18;
+  --input-bg-color: #1c1b18;
+  --input-hover-bg-color: #25231e;
+  --color-surface-high: #2e2c26;
+  --color-surface-mid: #25231e;
+  --color-surface-low: #1f1d19;
+  --color-surface-lowest: #2a2823;
+}
+
+/* Sits beside Excalidraw’s main menu (not under it): matches FixedSideContainer
+   offset + --lg-button-size + small gap. Vars live on `.excalidraw` only, so use rem. */
+.aimtutor-brand-row {
+  position: absolute;
+  top: 0.75rem;
+  left: calc(1rem + 2.25rem + 0.5rem);
+  z-index: var(--zIndex-layerUI, 4);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+  pointer-events: auto;
+}
+
+.aimtutor-brand {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  height: 2.25rem; /* Force height to match the exact 36px Excalidraw hamburger */
+  text-decoration: none;
+}
+
+/* ── Breadcrumb nav (beside logo in whiteboard editor) ───────────────────── */
+.aimtutor-breadcrumb {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  pointer-events: auto;
+  
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  font-family: "Plus Jakarta Sans", var(--ui-font, system-ui), sans-serif;
+}
+
+/* "My workspace" pill button */
+.aimtutor-breadcrumb__home {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.80);
+  color: #374151;
+  text-decoration: none;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
+.aimtutor-breadcrumb__home:hover {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(37, 99, 235, 0.30);
+  color: #2563eb;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.15);
+}
+
+/* Separator › */
+.aimtutor-breadcrumb__sep {
+  color: #9ca3af;
+  font-size: 1rem;
+  line-height: 1;
+  user-select: none;
+  margin: 0 1px;
+}
+
+/* Board title */
+.aimtutor-breadcrumb__board {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #111827;
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+/* Loading skeleton for board title */
+@keyframes aimtutor-bc-shimmer {
+  0%   { background-position: -300px 0; }
+  100% { background-position:  300px 0; }
+}
+
+.aimtutor-breadcrumb__board--loading {
+  display: inline-block;
+  width: 90px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(0,0,0,0.07) 25%,
+    rgba(0,0,0,0.12) 50%,
+    rgba(0,0,0,0.07) 75%
+  );
+  background-size: 600px 100%;
+  animation: aimtutor-bc-shimmer 1.4s infinite linear;
+  vertical-align: middle;
+}
+
+/* ── Dark mode overrides ─────────────────────────────────────────────────── */
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-breadcrumb__home,
+html.dark .aimtutor-breadcrumb__home {
+  background: rgba(30, 30, 30, 0.80);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #d1d5db;
+}
+
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-breadcrumb__home:hover,
+html.dark .aimtutor-breadcrumb__home:hover {
+  background: rgba(40, 40, 40, 0.96);
+  border-color: rgba(99, 160, 251, 0.40);
+  color: #93c5fd;
+  box-shadow: 0 1px 4px rgba(59, 130, 246, 0.20);
+}
+
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-breadcrumb__sep,
+html.dark .aimtutor-breadcrumb__sep {
+  color: #4b5563;
+}
+
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-breadcrumb__board,
+html.dark .aimtutor-breadcrumb__board {
+  color: #e5e7eb;
+}
+
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-breadcrumb__board--loading,
+html.dark .aimtutor-breadcrumb__board--loading {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.06) 25%,
+    rgba(255,255,255,0.12) 50%,
+    rgba(255,255,255,0.06) 75%
+  );
+  background-size: 600px 100%;
+}
+
+.aimtutor-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  font-family:
+    "Plus Jakarta Sans",
+    var(--ui-font, system-ui),
+    -apple-system,
+    sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.aimtutor-wordmark--toolbar {
+  font-size: 1.0625rem;
+}
+
+.aimtutor-wordmark--welcome {
+  font-size: clamp(1.75rem, 5.25vw, 2.75rem);
+  margin-bottom: 0.25em;
+}
+
+.aimtutor-wordmark--card {
+  font-size: 1.15rem;
+}
+
+/* Light: Aim = blue; Tutor + .ai = black */
+.aimtutor-wordmark__aim {
+  color: #2563eb;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.aimtutor-wordmark__rest,
+.aimtutor-wordmark__tld {
+  color: #0a0a0a;
+  font-weight: 600;
+}
+
+/* Dark: Aim = brighter blue; Tutor + .ai = white */
+.excalidraw-app:has(.excalidraw.theme--dark)
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__aim,
+.excalidraw.theme--dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__aim,
+html.dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__aim {
+  color: #60a5fa;
+}
+
+.excalidraw-app:has(.excalidraw.theme--dark)
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__rest,
+.excalidraw-app:has(.excalidraw.theme--dark)
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__tld,
+.excalidraw.theme--dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__rest,
+.excalidraw.theme--dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__tld,
+html.dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__rest,
+html.dark
+  .aimtutor-wordmark:not(.aimtutor-wordmark--on-primary)
+  .aimtutor-wordmark__tld {
+  color: #f8fafc;
+}
+
+/* Primary card: high-contrast on purple circle */
+.aimtutor-wordmark--on-primary .aimtutor-wordmark__aim {
+  color: #dbeafe;
+  font-weight: 700;
+}
+
+.aimtutor-wordmark--on-primary .aimtutor-wordmark__rest,
+.aimtutor-wordmark--on-primary .aimtutor-wordmark__tld {
+  color: #fff;
+  font-weight: 600;
+}
+
+@media screen and (min-width: 1921px) {
+  .aimtutor-brand-row {
+    left: calc(1rem + 2.5rem + 0.5rem);
+  }
+
+  :root[dir="rtl"] .aimtutor-brand-row {
+    left: auto;
+    right: calc(1rem + 2.5rem + 0.5rem);
+  }
+}
+
+:root[dir="rtl"] .aimtutor-brand-row {
+  left: auto;
+  right: calc(1rem + 2.25rem + 0.5rem);
+}
+
+/* Clerk controls: rendered inside Excalidraw `renderTopRightUI` (z-index above canvas). */
+.aimtutor-auth {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.aimtutor-auth--docked {
+  max-width: min(260px, 42vw);
+}
+
+.aimtutor-auth--loading {
+  min-height: 28px;
+  min-width: 72px;
+}
+
+.aimtutor-auth__btn {
+  font-family: var(--ui-font, system-ui, sans-serif);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--border-radius-md, 0.375rem);
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  color: #1a1a1a;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  &:hover {
+    background: #fff;
+  }
+
+  &:active {
+    transform: translateY(1px);
+  }
+}
+
+.aimtutor-auth__btn--primary {
+  border-color: var(--color-primary, #6965db);
+  background: var(--color-primary, #6965db);
+  color: #fff;
+
+  &:hover {
+    filter: brightness(1.05);
+  }
+}
+
+html.dark .aimtutor-auth__btn:not(.aimtutor-auth__btn--primary),
+.excalidraw-app:has(.excalidraw.theme--dark)
+  .aimtutor-auth__btn:not(.aimtutor-auth__btn--primary) {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(40, 40, 40, 0.92);
+  color: #f3f3f3;
+
+  &:hover {
+    background: rgba(55, 55, 55, 0.95);
+  }
+}
+
+html.dark .aimtutor-auth__btn--primary,
+.excalidraw-app:has(.excalidraw.theme--dark) .aimtutor-auth__btn--primary {
+  color: #fff;
+}
+
+@media (max-width: 768px) {
+  .aimtutor-brand-row {
+    top: 0.75rem;
+    left: calc(0.75rem + 2.25rem + 0.5rem);
+  }
+
+  :root[dir="rtl"] .aimtutor-brand-row {
+    left: auto;
+    right: calc(0.75rem + 2.25rem + 0.5rem);
+  }
+
+  .aimtutor-wordmark--toolbar {
+    font-size: 1rem;
+  }
+
+  .aimtutor-auth--docked {
+    max-width: min(220px, 55vw);
+  }
+
+  .aimtutor-auth__btn {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.55rem;
+  }
+
+  /* Breadcrumb: compact on tablet */
+  .aimtutor-breadcrumb__home {
+    padding: 3px 7px;
+    font-size: 0.75rem;
+    gap: 4px;
+  }
+
+  .aimtutor-breadcrumb__board {
+    max-width: 120px;
+    font-size: 0.75rem;
+  }
+}
+
+/* Extra small: hide board title to save space */
+@media (max-width: 480px) {
+  .aimtutor-breadcrumb__sep,
+  .aimtutor-breadcrumb__board {
+    display: none;
+  }
+
+  .aimtutor-breadcrumb__home {
+    padding: 3px 6px;
+    font-size: 0.75rem;
+  }
+}
+
+.plus-banner {
+  display: flex;
+  justify-content: center;
+  cursor: pointer;
+  align-items: center;
+  border: 1px solid var(--color-primary);
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--border-radius-lg);
+  background-color: var(--island-bg-color);
+  text-decoration: none !important;
+
+  font-family: var(--ui-font);
+  font-size: 0.8333rem;
+  box-sizing: border-box;
+  height: var(--lg-button-size);
+
+  border: none;
+  box-shadow: 0 0 0 1px var(--color-surface-lowest);
+  background-color: var(--color-surface-low);
+  color: var(--button-color, var(--color-on-surface)) !important;
+
+  &:active {
+    box-shadow: 0 0 0 1px var(--color-brand-active);
+  }
+
+  &:hover {
+    background-color: var(--color-primary);
+    color: white !important;
+  }
+
+  &:active {
+    background-color: var(--color-primary-darker);
+  }
+}
+
+.theme--dark {
+  .plus-banner {
+    &:hover {
+      color: black !important;
+    }
+  }
+}
