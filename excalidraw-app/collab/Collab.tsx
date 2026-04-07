@@ -67,6 +67,7 @@ import {
   getCollaborationLink,
   getSyncableElements,
 } from "../data";
+import { getCollabSocketServerUrl } from "../data/collabSocketUrl";
 import {
   encodeFilesForUpload,
   FileManager,
@@ -520,8 +521,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.fallbackInitializationHandler = fallbackInitializationHandler;
 
     try {
+      const socketUrl = getCollabSocketServerUrl();
+      if (!socketUrl) {
+        throw new Error(
+          "Live collaboration: set VITE_APP_WS_SERVER_URL or VITE_APP_AI_BACKEND (Socket.IO runs on the same host as ai-backend).",
+        );
+      }
+
       this.portal.socket = this.portal.open(
-        socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
+        socketIOClient(socketUrl, {
           transports: ["websocket", "polling"],
         }),
         roomId,

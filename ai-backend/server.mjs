@@ -1402,6 +1402,9 @@ ensureSchema()
     const SOCKET_ROOMS = new Map();
 
     io.on("connection", (socket) => {
+      // Excalidraw frontend waits for this init signal before emitting join-room
+      socket.emit("init-room");
+
       socket.on("join-room", (roomId) => {
         socket.join(roomId);
         
@@ -1415,7 +1418,6 @@ ensureSchema()
         }
         roomSockets.add(socket.id);
         
-        socket.emit("init-room");
         socket.to(roomId).emit("new-user", socket.id);
         io.in(roomId).emit("room-user-change", Array.from(roomSockets));
       });

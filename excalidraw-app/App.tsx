@@ -240,7 +240,9 @@ const initializeScene = async (opts: {
 
   let roomLinkData = getCollaborationLinkData(window.location.href);
 
-  if (cloudBoardId && opts.fetchCloudBoard) {
+  // When opening a collaboration room link on a board route, prioritize
+  // joining the real-time room immediately instead of blocking on board fetch.
+  if (!roomLinkData && cloudBoardId && opts.fetchCloudBoard) {
     try {
       const cloudScene = await opts.fetchCloudBoard(cloudBoardId);
       if (!roomLinkData) {
@@ -896,7 +898,7 @@ const ExcalidrawWrapper = () => {
       });
     }
 
-    if (boardId && excalidrawAPI) {
+    if (boardId && excalidrawAPI && !collabAPI?.isCollaborating()) {
       saveCloudBoardDebounced(
         excalidrawAPI.getSceneElementsIncludingDeleted(),
         appState,
