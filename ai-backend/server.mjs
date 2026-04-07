@@ -321,6 +321,7 @@ async function ensureDefaultWorkspace(localUserId) {
 }
 
 async function assertWorkspaceOwned(workspaceId, localUserId) {
+  if (!/^\d+$/.test(String(workspaceId))) return null;
   const { rows } = await pool.query(
     `SELECT id, name, created_at, updated_at FROM workspaces WHERE id = $1 AND owner_user_id = $2`,
     [workspaceId, localUserId],
@@ -329,6 +330,7 @@ async function assertWorkspaceOwned(workspaceId, localUserId) {
 }
 
 async function assertFolderOwned(folderId, localUserId) {
+  if (!/^\d+$/.test(String(folderId))) return null;
   const { rows } = await pool.query(
     `
     SELECT f.id, f.workspace_id, f.name, f.sort_order, f.created_at, f.updated_at
@@ -342,6 +344,7 @@ async function assertFolderOwned(folderId, localUserId) {
 }
 
 async function assertBoardOwned(boardId, localUserId) {
+  if (!/^\d+$/.test(String(boardId))) return null;
   const { rows } = await pool.query(
     `
     SELECT b.id, b.folder_id, b.title, b.scene_gzip, b.created_by_user_id, b.created_at, b.updated_at
