@@ -238,20 +238,30 @@ const initializeScene = async (opts: {
   const boardPathMatch = window.location.pathname.match(/^\/board\/(\d+)$/);
   const cloudBoardId = boardPathMatch ? boardPathMatch[1] : null;
 
+  let roomLinkData = getCollaborationLinkData(window.location.href);
+
   if (cloudBoardId && opts.fetchCloudBoard) {
     try {
       const cloudScene = await opts.fetchCloudBoard(cloudBoardId);
-      return { scene: cloudScene, isExternalScene: false };
+      if (!roomLinkData) {
+        return { scene: cloudScene, isExternalScene: false };
+      }
+      // If we *do* have roomLinkData, we fall through so the collabAPI can initialize
+      // the websocket session, using the latest real-time state from the network.
     } catch (e: any) {
-      return {
-        scene: {
-          appState: {
-            errorMessage:
-              e?.message || "Could not load board. Sign in and try again.",
+      if (!roomLinkData) {
+        return {
+          scene: {
+            appState: {
+              errorMessage:
+                e?.message || "Could not load board. Sign in and try again.",
+            },
           },
-        },
-        isExternalScene: false,
-      };
+          isExternalScene: false,
+        };
+      }
+      // If there is a room link, swallow the 404/permissions error because
+      // a guest is legitimately joining the real-time session! Fall through.
     }
   }
 
@@ -277,7 +287,7 @@ const initializeScene = async (opts: {
     appState: restoreAppState(localDataState?.appState, null),
   };
 
-  let roomLinkData = getCollaborationLinkData(window.location.href);
+  // roomLinkData already checked at top of initializing scene
   const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
   if (isExternalScene) {
     if (
