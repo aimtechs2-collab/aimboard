@@ -256,7 +256,8 @@ export default defineConfig(({ mode }) => {
               },
             },
           ],
-          maximumFileSizeToCacheInBytes: 2.3 * 1024 ** 2, // 2.3MB
+          // Default Workbox limit is 2 MiB; main index chunk can exceed that as the app grows.
+          maximumFileSizeToCacheInBytes: 5 * 1024 ** 2,
         },
         manifest: {
           short_name: "aimtutor.ai",
