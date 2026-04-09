@@ -431,10 +431,12 @@ export const DEFAULT_ELEMENT_PROPS: {
 
 export const LIBRARY_SIDEBAR_TAB = "library";
 export const CANVAS_SEARCH_TAB = "search";
+/** AimTutor: right sidebar AI assistant (replaces library as default). */
+export const AIMTUTOR_AI_CHAT_TAB = "aimtutor-ai-chat";
 
 export const DEFAULT_SIDEBAR = {
   name: "default",
-  defaultTab: LIBRARY_SIDEBAR_TAB,
+  defaultTab: AIMTUTOR_AI_CHAT_TAB,
 } as const;
 
 export const LIBRARY_DISABLED_TYPES = new Set([

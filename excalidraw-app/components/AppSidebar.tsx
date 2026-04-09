@@ -1,81 +1,29 @@
-import { DefaultSidebar, Sidebar, THEME } from "@excalidraw/excalidraw";
-import {
-  messageCircleIcon,
-  presentationIcon,
-} from "@excalidraw/excalidraw/components/icons";
-import { LinkButton } from "@excalidraw/excalidraw/components/LinkButton";
-import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
+import { useMemo } from "react";
+
+import { DefaultSidebar } from "@excalidraw/excalidraw";
+import { useTunnels } from "@excalidraw/excalidraw/context/tunnels";
+
+import { AiSidebarChat, AiSidebarChatProvider } from "./AiSidebarChat";
 
 import "./AppSidebar.scss";
 
-export const AppSidebar = () => {
-  const { theme, openSidebar } = useUIAppState();
+/**
+ * Host sidebar shell (replaces package fallback). Injects AI chat panel into
+ * {@link packages/excalidraw/components/DefaultSidebar} via tunnel.
+ */
+export const AppSidebar = ({ boardId }: { boardId?: string | null }) => {
+  const { AiChatSidebarTunnel } = useTunnels();
+  /** Stable tunnel child so tunnel-rat does not remount the panel on every chat state update. */
+  const tunnelChat = useMemo(() => <AiSidebarChat />, []);
 
   return (
-    <DefaultSidebar>
-      <DefaultSidebar.TabTriggers>
-        <Sidebar.TabTrigger
-          tab="comments"
-          title="Make comments (Coming soon)"
-          style={{ opacity: 0.2, pointerEvents: "none", cursor: "not-allowed" }}
-        >
-          {messageCircleIcon}
-        </Sidebar.TabTrigger>
-        <Sidebar.TabTrigger
-          tab="presentation"
-          title="Create presentations (Coming soon)"
-          style={{ opacity: 0.2, pointerEvents: "none", cursor: "not-allowed" }}
-        >
-          {presentationIcon}
-        </Sidebar.TabTrigger>
-      </DefaultSidebar.TabTriggers>
-      <Sidebar.Tab tab="comments">
-        <div className="app-sidebar-promo-container">
-          <div
-            className="app-sidebar-promo-image"
-            style={{
-              ["--image-source" as any]: `url(/oss_promo_comments_${
-                theme === THEME.DARK ? "dark" : "light"
-              }.jpg)`,
-              opacity: 0.7,
-            }}
-          />
-          <div className="app-sidebar-promo-text">
-            Make comments with Excalidraw+
-          </div>
-          <LinkButton
-            href={`${
-              import.meta.env.VITE_APP_PLUS_LP
-            }/plus?utm_source=excalidraw&utm_medium=app&utm_content=comments_promo#excalidraw-redirect`}
-          >
-            Sign up now
-          </LinkButton>
-        </div>
-      </Sidebar.Tab>
-      <Sidebar.Tab tab="presentation" className="px-3">
-        <div className="app-sidebar-promo-container">
-          <div
-            className="app-sidebar-promo-image"
-            style={{
-              ["--image-source" as any]: `url(/oss_promo_presentations_${
-                theme === THEME.DARK ? "dark" : "light"
-              }.svg)`,
-              backgroundSize: "60%",
-              opacity: 0.4,
-            }}
-          />
-          <div className="app-sidebar-promo-text">
-            Create presentations with Excalidraw+
-          </div>
-          <LinkButton
-            href={`${
-              import.meta.env.VITE_APP_PLUS_LP
-            }/plus?utm_source=excalidraw&utm_medium=app&utm_content=presentations_promo#excalidraw-redirect`}
-          >
-            Sign up now
-          </LinkButton>
-        </div>
-      </Sidebar.Tab>
-    </DefaultSidebar>
+    <AiSidebarChatProvider boardId={boardId ?? null}>
+      <DefaultSidebar
+        onDock={false}
+        closeOnOutsideClick={false}
+        closeOnEscape={false}
+      />
+      <AiChatSidebarTunnel.In>{tunnelChat}</AiChatSidebarTunnel.In>
+    </AiSidebarChatProvider>
   );
 };

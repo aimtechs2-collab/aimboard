@@ -1,5 +1,3 @@
-import { CANVAS_SEARCH_TAB, DEFAULT_SIDEBAR } from "@excalidraw/common";
-
 import {
   isFlowchartNodeElement,
   isImageElement,
@@ -42,16 +40,6 @@ const getHints = ({
 }: HintViewerProps): null | string | string[] => {
   const { activeTool, isResizing, isRotating, lastPointerDownWith } = appState;
   const multiMode = appState.multiElement !== null;
-
-  if (
-    appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
-    appState.openSidebar.tab === CANVAS_SEARCH_TAB &&
-    appState.searchMatches?.matches.length
-  ) {
-    return t("hints.dismissSearch", {
-      shortcut: getTaggedShortcutKey("Escape"),
-    });
-  }
 
   if (appState.openSidebar && !editorInterface.canFitSidebar) {
     return null;

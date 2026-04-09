@@ -319,17 +319,37 @@ export function DashboardPage() {
   }, [isLoaded, isSignedIn, apiConfigured, refreshFolders]);
 
   useEffect(() => {
-    if (!selectedFolderId || !isSignedIn) { setBoards([]); return; }
+    if (!selectedFolderId || !isSignedIn) {
+      setBoards([]);
+      return;
+    }
+    // Optimistic folder row uses a temp id before createFolder returns; do not hit the API.
+    if (selectedFolderId.startsWith("__tmp__")) {
+      setSearch("");
+      setBoards([]);
+      setBoardsLoading(false);
+      return;
+    }
     let cancelled = false;
     setSearch("");
     setBoardsLoading(true);
     setBoards([]);
     (async () => {
-      try { await refreshBoards(selectedFolderId); }
-      catch (e: any) { if (!cancelled) setError(e?.message || "Failed to load boards"); }
-      finally { if (!cancelled) setBoardsLoading(false); }
+      try {
+        await refreshBoards(selectedFolderId);
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message || "Failed to load boards");
+        }
+      } finally {
+        if (!cancelled) {
+          setBoardsLoading(false);
+        }
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedFolderId, isSignedIn, refreshBoards]);
 
   // ── Workspace ────────────────────────────────────────────────────────────────
@@ -402,6 +422,9 @@ export function DashboardPage() {
   };
 
   const onDeleteFolder = async (folderId: string) => {
+    if (folderId.startsWith("__tmp__")) {
+      return;
+    }
     if (!window.confirm("Delete this folder and all boards inside?")) return;
     setError(null);
     
@@ -435,7 +458,10 @@ export function DashboardPage() {
   };
 
   const commitFolderRename = async () => {
-    if (!editingFolderId) return;
+    if (!editingFolderId || editingFolderId.startsWith("__tmp__")) {
+      setEditingFolderId(null);
+      return;
+    }
     const id = editingFolderId;
     const name = editingFolderName.trim();
     setEditingFolderId(null);
@@ -455,7 +481,15 @@ export function DashboardPage() {
 
   const moveFolder = async (index: number, dir: -1 | 1) => {
     const target = index + dir;
-    if (target < 0 || target >= folders.length || actionLoading) return;
+    if (target < 0 || target >= folders.length || actionLoading) {
+      return;
+    }
+    if (
+      folders[index]?.id.startsWith("__tmp__") ||
+      folders[target]?.id.startsWith("__tmp__")
+    ) {
+      return;
+    }
     const newFolders = [...folders];
     [newFolders[index], newFolders[target]] = [newFolders[target], newFolders[index]];
     setFolders(newFolders);
@@ -472,7 +506,9 @@ export function DashboardPage() {
   const openNewBoardModal = (e?: React.SyntheticEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
-    if (!selectedFolderId) return;
+    if (!selectedFolderId || selectedFolderId.startsWith("__tmp__")) {
+      return;
+    }
     setModalBoardTitle("");
     setShowNewBoardModal(true);
   };
@@ -485,7 +521,13 @@ export function DashboardPage() {
   };
 
   const onCreateBoard = async () => {
-    if (!selectedFolderId || boardCreatingRef.current) return;
+    if (
+      !selectedFolderId ||
+      selectedFolderId.startsWith("__tmp__") ||
+      boardCreatingRef.current
+    ) {
+      return;
+    }
     const title = modalBoardTitle.trim();
 
     closeNewBoardModal();
@@ -697,8 +739,16 @@ export function DashboardPage() {
             type="button"
             className="aim-dashboard__btn aim-dashboard__btn--primary aim-dashboard__btn--sm"
             onClick={openNewBoardModal}
-            disabled={!selectedFolderId}
-            title={!selectedFolderId ? "Select a folder first" : "Create a new board"}
+            disabled={
+              !selectedFolderId || selectedFolderId.startsWith("__tmp__")
+            }
+            title={
+              !selectedFolderId
+                ? "Select a folder first"
+                : selectedFolderId.startsWith("__tmp__")
+                  ? "Saving new folder…"
+                  : "Create a new board"
+            }
           >
             + New board
           </button>
@@ -881,7 +931,9 @@ export function DashboardPage() {
                   placeholder="Search boards…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  disabled={!selectedFolderId}
+                  disabled={
+                    !selectedFolderId || selectedFolderId.startsWith("__tmp__")
+                  }
                 />
               </div>
             </div>

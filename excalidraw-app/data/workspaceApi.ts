@@ -274,3 +274,196 @@ export async function renameWorkspace(
   const data = await parseJson<{ workspace: ApiWorkspace }>(res);
   return data.workspace;
 }
+
+export type SidebarChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+/** OpenAI-backed chat; key stays on ai-backend (OPENAI_API_KEY). Requires Clerk JWT. */
+export async function postSidebarChat(
+  getToken: () => Promise<string | null>,
+  messages: SidebarChatMessage[],
+): Promise<string> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(`${base}/v1/ai/sidebar-chat`, {
+    method: "POST",
+    headers: await headersJson(getToken),
+    body: JSON.stringify({ messages }),
+  });
+  const data = await parseJson<{ reply: string }>(res);
+  return data.reply ?? "";
+}
+
+export async function postSidebarChatStream(
+  getToken: () => Promise<string | null>,
+  messages: SidebarChatMessage[],
+  options?: {
+    onChunk?: (chunk: string) => void;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const token = await getToken();
+  const headers: Record<string, string> = {
+    Accept: "text/event-stream",
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await fetch(`${base}/v1/ai/sidebar-chat-streaming`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ messages }),
+    signal: options?.signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    try {
+      const parsed = JSON.parse(text) as { message?: string };
+      if (parsed?.message) {
+        msg = parsed.message;
+      }
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("No response stream");
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullResponse = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data: ")) {
+        continue;
+      }
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") {
+        return fullResponse;
+      }
+      try {
+        const parsed = JSON.parse(data) as
+          | { type: "content"; delta?: string }
+          | { type: "error"; error?: { message?: string } }
+          | { type: "done" };
+        if (parsed.type === "content" && parsed.delta) {
+          fullResponse += parsed.delta;
+          options?.onChunk?.(parsed.delta);
+        }
+        if (parsed.type === "error") {
+          throw new Error(parsed.error?.message || "Streaming request failed");
+        }
+      } catch (error) {
+        if (error instanceof Error) {
+          throw error;
+        }
+      }
+    }
+  }
+  return fullResponse;
+}
+
+export type BoardAiChatSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export async function listBoardAiChats(
+  getToken: () => Promise<string | null>,
+  boardId: string,
+): Promise<BoardAiChatSessionSummary[]> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(`${base}/v1/boards/${boardId}/ai-chats`, {
+    headers: await headersJson(getToken),
+  });
+  const data = await parseJson<{ sessions: BoardAiChatSessionSummary[] }>(res);
+  return data.sessions ?? [];
+}
+
+export async function getBoardAiChatSession(
+  getToken: () => Promise<string | null>,
+  boardId: string,
+  sessionId: string,
+): Promise<{
+  session: Omit<BoardAiChatSessionSummary, "messageCount">;
+  messages: SidebarChatMessage[];
+  contextMessages: SidebarChatMessage[];
+}> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(
+    `${base}/v1/boards/${boardId}/ai-chats/${sessionId}`,
+    { headers: await headersJson(getToken) },
+  );
+  return parseJson(res);
+}
+
+export async function createBoardAiChatSession(
+  getToken: () => Promise<string | null>,
+  boardId: string,
+  title?: string,
+): Promise<{ session: BoardAiChatSessionSummary }> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(`${base}/v1/boards/${boardId}/ai-chats`, {
+    method: "POST",
+    headers: await headersJson(getToken),
+    body: JSON.stringify(title ? { title } : {}),
+  });
+  return parseJson(res);
+}
+
+export async function putBoardAiChatSession(
+  getToken: () => Promise<string | null>,
+  boardId: string,
+  sessionId: string,
+  body: {
+    title?: string;
+    messages: SidebarChatMessage[];
+    contextMessages: SidebarChatMessage[];
+  },
+): Promise<{ session: BoardAiChatSessionSummary }> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(
+    `${base}/v1/boards/${boardId}/ai-chats/${sessionId}`,
+    {
+      method: "PUT",
+      headers: await headersJson(getToken),
+      body: JSON.stringify(body),
+    },
+  );
+  return parseJson(res);
+}

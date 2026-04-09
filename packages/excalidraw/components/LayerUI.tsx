@@ -482,7 +482,7 @@ const LayerUI = ({
       <DefaultSidebar.Trigger
         __fallback
         icon={sidebarRightIcon}
-        title={capitalizeString(t("toolBar.library"))}
+        title="AI chat"
         onToggle={(open) => {
           if (open) {
             trackEvent(

@@ -327,6 +327,64 @@
       width: 1.125rem;
       height: 1.125rem;
     }
+
+    &--docked-left,
+    &--docked-right {
+      .floating-desktop-toolbar__inner {
+        /* Dock mode: vertical side rail */
+        flex-direction: column;
+        align-items: stretch;
+        gap: calc(1 * var(--space-factor));
+      }
+
+      /* The relative-positioned wrapper div that wraps Stack.Col */
+      .floating-desktop-toolbar__inner > * {
+        width: 100%;
+      }
+
+      /* Stack.Col — already column, but make sure it stretches to fill width */
+      .Stack_vertical {
+        align-items: stretch !important;
+        width: 100% !important;
+      }
+
+      /* Every horizontal stack at any depth becomes vertical */
+      .Stack_horizontal {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        width: 100% !important;
+      }
+
+      /* The outer toolbar-container row and the inner button row */
+      .App-toolbar-container,
+      .App-toolbar {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        width: 100% !important;
+      }
+
+      /* Divider flips to horizontal rule */
+      .App-toolbar__divider {
+        width: 100% !important;
+        height: 1px !important;
+        min-height: 1px !important;
+        margin: 0.25rem 0 !important;
+        align-self: stretch !important;
+      }
+
+      /* Islands fill the rail width */
+      .Island:not(.floating-desktop-toolbar__chrome) {
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }
+
+      /* Collab island: remove auto side-margin and fill width */
+      .Island[style*="marginLeft"] {
+        margin-left: 0 !important;
+        align-self: stretch !important;
+        height: auto !important;
+      }
+    }
   }
 
   &.theme--dark {

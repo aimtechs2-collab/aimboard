@@ -1,9 +1,8 @@
 import clsx from "clsx";
 
 import {
-  CANVAS_SEARCH_TAB,
+  AIMTUTOR_AI_CHAT_TAB,
   DEFAULT_SIDEBAR,
-  LIBRARY_SIDEBAR_TAB,
   composeEventHandlers,
 } from "@excalidraw/common";
 
@@ -15,11 +14,9 @@ import { useUIAppState } from "../context/ui-appState";
 import "../components/dropdownMenu/DropdownMenu.scss";
 
 import { useExcalidrawSetAppState } from "./App";
-import { LibraryMenu } from "./LibraryMenu";
-import { SearchMenu } from "./SearchMenu";
 import { Sidebar } from "./Sidebar/Sidebar";
 import { withInternalFallback } from "./hoc/withInternalFallback";
-import { LibraryIcon, searchIcon } from "./icons";
+import { messageCircleIcon } from "./icons";
 
 import type { SidebarProps, SidebarTriggerProps } from "./Sidebar/common";
 
@@ -72,9 +69,8 @@ export const DefaultSidebar = Object.assign(
       const appState = useUIAppState();
       const setAppState = useExcalidrawSetAppState();
 
-      const { DefaultSidebarTabTriggersTunnel } = useTunnels();
-
-      const isForceDocked = appState.openSidebar?.tab === CANVAS_SEARCH_TAB;
+      const { DefaultSidebarTabTriggersTunnel, AiChatSidebarTunnel } =
+        useTunnels();
 
       return (
         <Sidebar
@@ -82,40 +78,29 @@ export const DefaultSidebar = Object.assign(
           name="default"
           key="default"
           className={clsx("default-sidebar", className)}
-          docked={
-            isForceDocked || (docked ?? appState.defaultSidebarDockedPreference)
-          }
+          docked={docked ?? appState.defaultSidebarDockedPreference}
           onDock={
-            // `onDock=false` disables docking.
-            // if `docked` passed, but no onDock passed, disable manual docking.
-            isForceDocked || onDock === false || (!onDock && docked != null)
+            onDock === false || (!onDock && docked != null)
               ? undefined
-              : // compose to allow the host app to listen on default behavior
-                composeEventHandlers(onDock, (docked) => {
-                  setAppState({ defaultSidebarDockedPreference: docked });
+              : composeEventHandlers(onDock, (dockedNext) => {
+                  setAppState({ defaultSidebarDockedPreference: dockedNext });
                 })
           }
         >
           <Sidebar.Tabs>
             <Sidebar.Header>
               <Sidebar.TabTriggers>
-                <Sidebar.TabTrigger tab={CANVAS_SEARCH_TAB}>
-                  {searchIcon}
-                </Sidebar.TabTrigger>
-                <Sidebar.TabTrigger 
-                  tab={LIBRARY_SIDEBAR_TAB}
-                  style={{ opacity: 0.2, pointerEvents: "none", cursor: "not-allowed" }}
+                <Sidebar.TabTrigger
+                  tab={AIMTUTOR_AI_CHAT_TAB}
+                  title="AI assistant"
                 >
-                  {LibraryIcon}
+                  {messageCircleIcon}
                 </Sidebar.TabTrigger>
                 <DefaultSidebarTabTriggersTunnel.Out />
               </Sidebar.TabTriggers>
             </Sidebar.Header>
-            <Sidebar.Tab tab={LIBRARY_SIDEBAR_TAB}>
-              <LibraryMenu />
-            </Sidebar.Tab>
-            <Sidebar.Tab tab={CANVAS_SEARCH_TAB}>
-              <SearchMenu />
+            <Sidebar.Tab tab={AIMTUTOR_AI_CHAT_TAB}>
+              <AiChatSidebarTunnel.Out />
             </Sidebar.Tab>
             {children}
           </Sidebar.Tabs>

@@ -281,6 +281,36 @@ async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_boards_folder_updated ON boards(folder_id, updated_at DESC);
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS board_ai_chat_sessions (
+      id BIGSERIAL PRIMARY KEY,
+      board_id BIGINT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'Chat',
+      context_messages_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_board_ai_chat_sessions_board_user_updated
+    ON board_ai_chat_sessions(board_id, user_id, updated_at DESC);
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS board_ai_chat_messages (
+      id BIGSERIAL PRIMARY KEY,
+      session_id BIGINT NOT NULL REFERENCES board_ai_chat_sessions(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(session_id, position)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_board_ai_chat_messages_session_pos
+    ON board_ai_chat_messages(session_id, position);
+  `);
 }
 
 const DEFAULT_SCENE_SOURCE = "https://aimtutor.ai";
@@ -357,6 +387,80 @@ async function assertBoardOwned(boardId, localUserId) {
     [boardId, localUserId],
   );
   return rows[0] ?? null;
+}
+
+async function assertBoardAiSessionOwned(sessionId, boardId, localUserId) {
+  if (!/^\d+$/.test(String(sessionId))) return null;
+  const { rows } = await pool.query(
+    `
+    SELECT s.id, s.board_id, s.user_id, s.title, s.context_messages_json, s.created_at, s.updated_at
+    FROM board_ai_chat_sessions s
+    WHERE s.id = $1 AND s.board_id = $2 AND s.user_id = $3
+    `,
+    [sessionId, boardId, localUserId],
+  );
+  return rows[0] ?? null;
+}
+
+function parseSidebarChatMessagesArray(raw) {
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  if (raw.length > 400) {
+    return null;
+  }
+  const out = [];
+  for (const m of raw) {
+    if (!m || typeof m !== "object" || Array.isArray(m)) {
+      return null;
+    }
+    const role =
+      m.role === "assistant"
+        ? "assistant"
+        : m.role === "user"
+          ? "user"
+          : null;
+    if (!role) {
+      return null;
+    }
+    out.push({
+      role,
+      content: String(m.content ?? "").slice(0, 12000),
+    });
+  }
+  return out;
+}
+
+function parseContextMessagesJson(raw) {
+  if (raw == null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  if (raw.length > 200) {
+    return null;
+  }
+  const out = [];
+  for (const m of raw) {
+    if (!m || typeof m !== "object" || Array.isArray(m)) {
+      return null;
+    }
+    const role =
+      m.role === "assistant"
+        ? "assistant"
+        : m.role === "user"
+          ? "user"
+          : null;
+    if (!role) {
+      return null;
+    }
+    out.push({
+      role,
+      content: String(m.content ?? "").slice(0, 12000),
+    });
+  }
+  return out;
 }
 
 function parseActivityEvents(body) {
@@ -1144,6 +1248,251 @@ app.delete(
   }),
 );
 
+app.get(
+  "/v1/boards/:boardId/ai-chats",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) return;
+    const auth = requireAuthApi(req, res);
+    if (!auth) return;
+    const localUserId = await upsertUserFromAuth(auth);
+    const boardId = req.params.boardId;
+    const board = await assertBoardOwned(boardId, localUserId);
+    if (!board) {
+      res.locals.auditError = "board not found";
+      res.status(404).json({ message: "Board not found" });
+      return;
+    }
+    const { rows } = await pool.query(
+      `
+      SELECT s.id, s.title, s.created_at, s.updated_at,
+        (SELECT COUNT(*)::int FROM board_ai_chat_messages m WHERE m.session_id = s.id) AS message_count
+      FROM board_ai_chat_sessions s
+      WHERE s.board_id = $1 AND s.user_id = $2
+      ORDER BY s.updated_at DESC
+      LIMIT 100
+      `,
+      [boardId, localUserId],
+    );
+    res.locals.auditDetails = { kind: "board_ai_chats_list" };
+    res.json({
+      sessions: rows.map((r) => ({
+        id: String(r.id),
+        title: r.title,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        messageCount: r.message_count,
+      })),
+    });
+  }),
+);
+
+app.get(
+  "/v1/boards/:boardId/ai-chats/:sessionId",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) return;
+    const auth = requireAuthApi(req, res);
+    if (!auth) return;
+    const localUserId = await upsertUserFromAuth(auth);
+    const boardId = req.params.boardId;
+    const sessionId = req.params.sessionId;
+    const board = await assertBoardOwned(boardId, localUserId);
+    if (!board) {
+      res.locals.auditError = "board not found";
+      res.status(404).json({ message: "Board not found" });
+      return;
+    }
+    const session = await assertBoardAiSessionOwned(sessionId, boardId, localUserId);
+    if (!session) {
+      res.locals.auditError = "chat session not found";
+      res.status(404).json({ message: "Chat session not found" });
+      return;
+    }
+    let contextMessages = [];
+    try {
+      const raw = session.context_messages_json;
+      const parsed =
+        typeof raw === "string" ? JSON.parse(raw) : raw;
+      const cm = parseContextMessagesJson(parsed);
+      if (cm == null) {
+        contextMessages = [];
+      } else {
+        contextMessages = cm;
+      }
+    } catch {
+      contextMessages = [];
+    }
+    const msgRows = await pool.query(
+      `
+      SELECT role, content FROM board_ai_chat_messages
+      WHERE session_id = $1
+      ORDER BY position ASC
+      `,
+      [sessionId],
+    );
+    res.locals.auditDetails = { kind: "board_ai_chat_get" };
+    res.json({
+      session: {
+        id: String(session.id),
+        title: session.title,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+      },
+      contextMessages,
+      messages: msgRows.rows.map((r) => ({
+        role: r.role,
+        content: r.content,
+      })),
+    });
+  }),
+);
+
+app.post(
+  "/v1/boards/:boardId/ai-chats",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) return;
+    const auth = requireAuthApi(req, res);
+    if (!auth) return;
+    const localUserId = await upsertUserFromAuth(auth);
+    const boardId = req.params.boardId;
+    const board = await assertBoardOwned(boardId, localUserId);
+    if (!board) {
+      res.locals.auditError = "board not found";
+      res.status(404).json({ message: "Board not found" });
+      return;
+    }
+    const titleRaw =
+      typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : "";
+    const title = titleRaw || "Chat";
+    const { rows } = await pool.query(
+      `
+      INSERT INTO board_ai_chat_sessions (board_id, user_id, title)
+      VALUES ($1, $2, $3)
+      RETURNING id, title, created_at, updated_at
+      `,
+      [boardId, localUserId, title],
+    );
+    const r = rows[0];
+    res.locals.auditDetails = { kind: "board_ai_chat_create" };
+    res.status(201).json({
+      session: {
+        id: String(r.id),
+        title: r.title,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        messageCount: 0,
+      },
+    });
+  }),
+);
+
+app.put(
+  "/v1/boards/:boardId/ai-chats/:sessionId",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) return;
+    const auth = requireAuthApi(req, res);
+    if (!auth) return;
+    const localUserId = await upsertUserFromAuth(auth);
+    const boardId = req.params.boardId;
+    const sessionId = req.params.sessionId;
+    const board = await assertBoardOwned(boardId, localUserId);
+    if (!board) {
+      res.locals.auditError = "board not found";
+      res.status(404).json({ message: "Board not found" });
+      return;
+    }
+    const session = await assertBoardAiSessionOwned(sessionId, boardId, localUserId);
+    if (!session) {
+      res.locals.auditError = "chat session not found";
+      res.status(404).json({ message: "Chat session not found" });
+      return;
+    }
+    const messages = parseSidebarChatMessagesArray(req.body?.messages);
+    if (messages == null) {
+      res.locals.auditError = "invalid messages";
+      res.status(400).json({ message: "body.messages must be an array of {role, content}" });
+      return;
+    }
+    const contextMessages = parseContextMessagesJson(req.body?.contextMessages);
+    if (contextMessages == null) {
+      res.locals.auditError = "invalid contextMessages";
+      res.status(400).json({
+        message: "body.contextMessages must be an array of {role, content}",
+      });
+      return;
+    }
+    const titleUpd =
+      typeof req.body?.title === "string"
+        ? req.body.title.trim().slice(0, 200) || null
+        : null;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM board_ai_chat_messages WHERE session_id = $1`,
+        [sessionId],
+      );
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        await client.query(
+          `
+          INSERT INTO board_ai_chat_messages (session_id, position, role, content)
+          VALUES ($1, $2, $3, $4)
+          `,
+          [sessionId, i, m.role, m.content],
+        );
+      }
+      let ctxJson;
+      try {
+        ctxJson = JSON.stringify(contextMessages);
+        if (ctxJson.length > 500_000) {
+          throw new Error("context too large");
+        }
+      } catch (e) {
+        await client.query("ROLLBACK");
+        res.locals.auditError = "context serialize failed";
+        res.status(400).json({ message: "contextMessages too large" });
+        return;
+      }
+      await client.query(
+        `
+        UPDATE board_ai_chat_sessions
+        SET
+          title = COALESCE($2, title),
+          context_messages_json = $3::jsonb,
+          updated_at = NOW()
+        WHERE id = $1
+        `,
+        [sessionId, titleUpd, ctxJson],
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+    const { rows } = await pool.query(
+      `SELECT id, title, created_at, updated_at FROM board_ai_chat_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const r = rows[0];
+    const cnt = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM board_ai_chat_messages WHERE session_id = $1`,
+      [sessionId],
+    );
+    res.locals.auditDetails = { kind: "board_ai_chat_put" };
+    res.json({
+      session: {
+        id: String(r.id),
+        title: r.title,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        messageCount: cnt.rows[0]?.c ?? 0,
+      },
+    });
+  }),
+);
+
 app.post(
   "/v1/ai/text-to-diagram/chat-streaming",
   asyncRoute(async (req, res) => {
@@ -1238,6 +1587,209 @@ app.post(
         },
       });
       res.end();
+    }
+  }),
+);
+
+const SIDEBAR_CHAT_SYSTEM = `You are AimTutor's teaching-planning assistant inside AimTutor.ai, a collaborative whiteboard app.
+
+Your user is a **tutor or teacher** planning what to teach on the whiteboard—not a student who needs a Wikipedia-style explanation.
+
+## Highest-priority rule: subject / unit / course-area messages
+If the user names or asks about a **subject, unit, topic area, or course theme**—including very short messages (e.g. "statistics and probability", "linear equations", "photosynthesis")—you must **not** answer with:
+- textbook-style **definitions** of the field ("X is the branch of mathematics that…"),
+- long introductory paragraphs about what the field *is*,
+- generic encouragement ("feel free to ask") **unless** you have **already** delivered the full roadmap below.
+
+**Start the answer immediately** with structured lesson planning. Your **first heading** must be \`## Scope\` (or equivalent)—not a definition block.
+
+### Required structure (use Markdown, be scannable)
+1. **## Scope** — At most 1–2 sentences: what you are covering + assumed level if unknown.
+2. **## Teachable units** — **Ordered numbered main units** (e.g. 1., 2., 3.). Under **each** unit, **bullets** with **specific subtopics or skills** to teach (outcome-style is good: "Learners can compute conditional probability").
+3. **## Suggested sequence** — Prerequisites, what to teach first vs later (short).
+4. **## Teaching hooks** (optional, short) — Misconceptions + 1–2 whiteboard ideas.
+
+Aim for **at least 6–10 distinct subtopics** across the units for a broad area like statistics and probability (unless the user asked for a narrow slice). Depth should support **multiple sessions**, not one paragraph.
+
+## When the message is clearly NOT a subject roadmap request
+Examples: how to use the app, one specific homework problem, "what does this symbol mean", clarifying a single diagram.
+
+Then answer **directly and concisely** without the full roadmap.
+
+## Style
+Pedagogically sound, neutral tone. Do not invent official syllabi or exam boards unless named; state level assumptions once.`;
+
+app.post(
+  "/v1/ai/sidebar-chat-streaming",
+  asyncRoute(async (req, res) => {
+    if (!requireApiKey(res)) {
+      return;
+    }
+    if (!requireDatabase(res)) {
+      return;
+    }
+    const auth = requireAuthApi(req, res);
+    if (!auth) {
+      return;
+    }
+    const localUserId = await upsertUserFromAuth(auth);
+
+    const { messages } = req.body ?? {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.locals.auditError = "sidebar-chat-streaming: messages required";
+      res
+        .status(400)
+        .json({ message: "body.messages must be a non-empty array" });
+      return;
+    }
+
+    const trimmed = messages
+      .slice(-24)
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content ?? "").slice(0, 12000),
+      }))
+      .filter((m) => m.content.length > 0);
+
+    if (!trimmed.length) {
+      res.locals.auditError = "sidebar-chat-streaming: empty content";
+      res.status(400).json({ message: "No valid message content" });
+      return;
+    }
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    const sendSse = (obj) => {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    };
+
+    try {
+      const stream = await openai.chat.completions.create({
+        model: MODEL,
+        stream: true,
+        messages: [{ role: "system", content: SIDEBAR_CHAT_SYSTEM }, ...trimmed],
+        max_tokens: 2048,
+        temperature: 0.7,
+      });
+      let promptTokens = null;
+      let completionTokens = null;
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? "";
+        promptTokens = chunk?.usage?.prompt_tokens ?? promptTokens;
+        completionTokens = chunk?.usage?.completion_tokens ?? completionTokens;
+        if (delta) {
+          sendSse({ type: "content", delta });
+        }
+      }
+      await logUsage({
+        userId: localUserId,
+        endpoint: "/v1/ai/sidebar-chat-streaming",
+        model: MODEL,
+        promptTokens,
+        completionTokens,
+      });
+      res.locals.auditDetails = {
+        kind: "ai_sidebar_chat_stream",
+        model: MODEL,
+        messageCount: trimmed.length,
+        promptTokens,
+        completionTokens,
+      };
+      sendSse({ type: "done", finishReason: "stop" });
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch (err) {
+      res.locals.auditError = err?.message || "sidebar chat stream failed";
+      res.locals.auditDetails = {
+        kind: "ai_sidebar_chat_stream",
+        model: MODEL,
+        failed: true,
+      };
+      sendSse({
+        type: "error",
+        error: {
+          message: publicErrorMessage(err),
+          status: err?.status ?? 500,
+        },
+      });
+      res.end();
+    }
+  }),
+);
+
+app.post(
+  "/v1/ai/sidebar-chat",
+  asyncRoute(async (req, res) => {
+    if (!requireApiKey(res)) {
+      return;
+    }
+    if (!requireDatabase(res)) {
+      return;
+    }
+    const auth = requireAuthApi(req, res);
+    if (!auth) {
+      return;
+    }
+    const localUserId = await upsertUserFromAuth(auth);
+
+    const { messages } = req.body ?? {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.locals.auditError = "sidebar-chat: messages required";
+      res
+        .status(400)
+        .json({ message: "body.messages must be a non-empty array" });
+      return;
+    }
+
+    const trimmed = messages
+      .slice(-24)
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content ?? "").slice(0, 12000),
+      }))
+      .filter((m) => m.content.length > 0);
+
+    if (!trimmed.length) {
+      res.locals.auditError = "sidebar-chat: empty content";
+      res.status(400).json({ message: "No valid message content" });
+      return;
+    }
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    try {
+      const completion = await openai.chat.completions.create({
+        model: MODEL,
+        messages: [
+          { role: "system", content: SIDEBAR_CHAT_SYSTEM },
+          ...trimmed,
+        ],
+        max_tokens: 2048,
+        temperature: 0.7,
+      });
+      const reply = completion.choices[0]?.message?.content?.trim() ?? "";
+      await logUsage({
+        userId: localUserId,
+        endpoint: "/v1/ai/sidebar-chat",
+        model: MODEL,
+        promptTokens: completion.usage?.prompt_tokens ?? null,
+        completionTokens: completion.usage?.completion_tokens ?? null,
+      });
+      res.locals.auditDetails = {
+        kind: "ai_sidebar_chat",
+        model: MODEL,
+        messageCount: trimmed.length,
+      };
+      res.json({ reply });
+    } catch (err) {
+      res.locals.auditError = err?.message || "sidebar chat failed";
+      res.status(500).json({ message: publicErrorMessage(err) });
     }
   }),
 );
@@ -1384,7 +1936,13 @@ ensureSchema()
       console.log(`  PUT    /v1/boards/:boardId`);
       console.log(`  PATCH  /v1/boards/:boardId`);
       console.log(`  DELETE /v1/boards/:boardId`);
+      console.log(`  GET    /v1/boards/:boardId/ai-chats`);
+      console.log(`  GET    /v1/boards/:boardId/ai-chats/:sessionId`);
+      console.log(`  POST   /v1/boards/:boardId/ai-chats`);
+      console.log(`  PUT    /v1/boards/:boardId/ai-chats/:sessionId`);
       console.log(`  POST   /v1/ai/text-to-diagram/chat-streaming`);
+      console.log(`  POST   /v1/ai/sidebar-chat-streaming`);
+      console.log(`  POST   /v1/ai/sidebar-chat`);
       console.log(`  POST   /v1/ai/diagram-to-code/generate`);
     });
 

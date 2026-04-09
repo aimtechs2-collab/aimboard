@@ -11,11 +11,7 @@
  */
 
 import { clearAppStateForLocalStorage } from "@excalidraw/excalidraw/appState";
-import {
-  CANVAS_SEARCH_TAB,
-  DEFAULT_SIDEBAR,
-  debounce,
-} from "@excalidraw/common";
+import { DEFAULT_SIDEBAR, debounce } from "@excalidraw/common";
 import {
   createStore,
   entries,
@@ -80,10 +76,7 @@ const saveDataStateToLocalStorage = (
   try {
     const _appState = clearAppStateForLocalStorage(appState);
 
-    if (
-      _appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
-      _appState.openSidebar.tab === CANVAS_SEARCH_TAB
-    ) {
+    if (_appState.openSidebar?.name === DEFAULT_SIDEBAR.name) {
       _appState.openSidebar = null;
     }
 

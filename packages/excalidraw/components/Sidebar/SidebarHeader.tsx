@@ -5,6 +5,7 @@ import { t } from "../../i18n";
 import { useEditorInterface } from "../App";
 import { Button } from "../Button";
 import { Tooltip } from "../Tooltip";
+import { useTunnels } from "../../context/tunnels";
 import { CloseIcon, PinIcon } from "../icons";
 
 import { SidebarPropsContext } from "./common";
@@ -18,6 +19,7 @@ export const SidebarHeader = ({
 }) => {
   const editorInterface = useEditorInterface();
   const props = useContext(SidebarPropsContext);
+  const { AiSidebarHeaderActionsTunnel } = useTunnels();
 
   const renderDockButton = !!(
     editorInterface.canFitSidebar && props.shouldRenderDockButton
@@ -43,6 +45,7 @@ export const SidebarHeader = ({
             </Button>
           </Tooltip>
         )}
+        <AiSidebarHeaderActionsTunnel.Out />
         <Button
           data-testid="sidebar-close"
           className="sidebar__close"

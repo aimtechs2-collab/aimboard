@@ -13,6 +13,9 @@ type TunnelsContextValue = {
   FooterCenterTunnel: Tunnel;
   DefaultSidebarTriggerTunnel: Tunnel;
   DefaultSidebarTabTriggersTunnel: Tunnel;
+  AiChatSidebarTunnel: Tunnel;
+  /** Optional actions (e.g. “new chat”) rendered in the default sidebar header next to close. */
+  AiSidebarHeaderActionsTunnel: Tunnel;
   OverwriteConfirmDialogTunnel: Tunnel;
   TTDDialogTriggerTunnel: Tunnel;
   // this can be removed once we create jotai stores per each editor
@@ -37,6 +40,8 @@ export const useInitializeTunnels = () => {
       FooterCenterTunnel: tunnel(),
       DefaultSidebarTriggerTunnel: tunnel(),
       DefaultSidebarTabTriggersTunnel: tunnel(),
+      AiChatSidebarTunnel: tunnel(),
+      AiSidebarHeaderActionsTunnel: tunnel(),
       OverwriteConfirmDialogTunnel: tunnel(),
       TTDDialogTriggerTunnel: tunnel(),
       tunnelsJotai,

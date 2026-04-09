@@ -435,6 +435,8 @@ const ExcalidrawWrapper = () => {
   const cloudBoardMetaRef = useRef<{ id: string; updatedAt: string } | null>(
     null,
   );
+  /** Serialize cloud PUTs so two saves never race on the same expectedUpdatedAt. */
+  const cloudSaveChainRef = useRef(Promise.resolve());
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
 
@@ -459,7 +461,11 @@ const ExcalidrawWrapper = () => {
         repairBindings: true,
         deleteInvisibleElements: true,
       }),
-      appState: restoreAppState(s.appState ?? {}, ls?.appState ?? null),
+      appState: {
+        ...restoreAppState(s.appState ?? {}, ls?.appState ?? null),
+        // Default board canvas zoom to 60% on open.
+        zoom: { value: 0.6 as AppState["zoom"]["value"] },
+      },
       files: s.files ?? {},
       scrollToContent: true,
     } as ExcalidrawInitialDataState;
@@ -468,42 +474,90 @@ const ExcalidrawWrapper = () => {
   const saveCloudBoardDebounced = useMemo(
     () =>
       debounce(
-        async (
+        (
           elements: readonly OrderedExcalidrawElement[],
           appState: AppState,
           files: BinaryFiles,
         ) => {
-          const meta = cloudBoardMetaRef.current;
-          if (!meta?.id) {
-            return;
-          }
-          try {
-            const raw = serializeAsJSON(elements, appState, files, "local");
-            const sceneObj = JSON.parse(raw) as Record<string, unknown>;
-            const { board } = await putBoardScene(
-              getTokenRef.current,
-              meta.id,
-              {
-                scene: sceneObj,
-                expectedUpdatedAt: meta.updatedAt,
-              },
-            );
-            cloudBoardMetaRef.current = {
-              id: meta.id,
-              updatedAt: new Date(board.updatedAt).toISOString(),
-            };
-          } catch (e: any) {
-            const msg = String(e?.message || "Could not save board");
-            const api = excalidrawAPIRef.current;
-            if (api) {
-              api.setToast({
-                message:
-                  msg.includes("modified") || msg.includes("409")
-                    ? "Board was updated elsewhere. Reload the page."
-                    : msg,
-              });
-            }
-          }
+          cloudSaveChainRef.current = cloudSaveChainRef.current
+            .catch(() => {})
+            .then(async () => {
+              const meta = cloudBoardMetaRef.current;
+              if (!meta?.id) {
+                return;
+              }
+              const expectedUpdatedAt = meta.updatedAt;
+              const runPut = async () => {
+                const raw = serializeAsJSON(elements, appState, files, "local");
+                const sceneObj = JSON.parse(raw) as Record<string, unknown>;
+                return putBoardScene(getTokenRef.current, meta.id, {
+                  scene: sceneObj,
+                  expectedUpdatedAt,
+                });
+              };
+              const toastErr = (msg: string) => {
+                const api = excalidrawAPIRef.current;
+                if (api) {
+                  api.setToast({ message: msg });
+                }
+              };
+              try {
+                const { board } = await runPut();
+                cloudBoardMetaRef.current = {
+                  id: meta.id,
+                  updatedAt: new Date(board.updatedAt).toISOString(),
+                };
+              } catch (e: unknown) {
+                const msg = String(
+                  (e as Error)?.message || "Could not save board",
+                );
+                const isConflict =
+                  msg.includes("modified") ||
+                  msg.includes("elsewhere") ||
+                  msg.includes("409");
+                if (!isConflict) {
+                  toastErr(msg);
+                  return;
+                }
+                try {
+                  const fresh = await getBoardWithScene(
+                    getTokenRef.current,
+                    meta.id,
+                  );
+                  cloudBoardMetaRef.current = {
+                    id: meta.id,
+                    updatedAt: new Date(fresh.board.updatedAt).toISOString(),
+                  };
+                  const raw = serializeAsJSON(
+                    elements,
+                    appState,
+                    files,
+                    "local",
+                  );
+                  const sceneObj = JSON.parse(raw) as Record<string, unknown>;
+                  const { board } = await putBoardScene(
+                    getTokenRef.current,
+                    meta.id,
+                    {
+                      scene: sceneObj,
+                      expectedUpdatedAt:
+                        cloudBoardMetaRef.current.updatedAt,
+                    },
+                  );
+                  cloudBoardMetaRef.current = {
+                    id: meta.id,
+                    updatedAt: new Date(board.updatedAt).toISOString(),
+                  };
+                } catch (e2: unknown) {
+                  toastErr(
+                    String(
+                      (e2 as Error)?.message ||
+                        "Board was updated elsewhere. Reload the page.",
+                    ),
+                  );
+                }
+              }
+            });
         },
         2500,
       ),
@@ -730,6 +784,7 @@ const ExcalidrawWrapper = () => {
       }
       if (
         !document.hidden &&
+        !boardId &&
         ((collabAPI && !collabAPI.isCollaborating()) || isCollabDisabled)
       ) {
         // don't sync if local state is newer or identical to browser state
@@ -817,6 +872,7 @@ const ExcalidrawWrapper = () => {
     };
   }, [
     isCollabDisabled,
+    boardId,
     collabAPI,
     excalidrawAPI,
     setLangCode,
@@ -1316,7 +1372,7 @@ const ExcalidrawWrapper = () => {
           }}
         />
 
-        <AppSidebar />
+        <AppSidebar boardId={boardId} />
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>

@@ -1,44 +1,40 @@
 import clsx from "clsx";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-
-import { collapseDownIcon, DotsIcon, PlusIcon } from "./icons";
-import { Island } from "./Island";
-import Stack from "./Stack";
+import React, { useEffect, useRef, useState } from "react";
 
 import "./FloatingDesktopToolbar.scss";
 
-const STORAGE_KEY = "excalidraw-floating-toolbar-v1";
+const STORAGE_KEY = "excalidraw-floating-toolbar-v3";
+const DRAG_THRESHOLD_PX = 5;
 
-type Stored = { x: number; y: number; collapsed: boolean };
+type DockSide = "left" | "right" | null;
+type Stored = { x: number; y: number; dockSide?: DockSide };
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
 function readStored(): Partial<Stored> {
-  if (typeof window === "undefined") {
-    return {};
-  }
+  if (typeof window === "undefined") return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    return JSON.parse(raw) as Partial<Stored>;
+    return raw ? (JSON.parse(raw) as Partial<Stored>) : {};
   } catch {
     return {};
   }
 }
 
+function persist(s: Stored) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  } catch {}
+}
+
 function defaultPosition(): { x: number; y: number } {
-  if (typeof window === "undefined") {
-    return { x: 100, y: 72 };
-  }
+  if (typeof window === "undefined") return { x: 100, y: 72 };
   const pad = 16;
-  const approxWidth = 420;
   return {
-    x: Math.round(Math.max(pad, (window.innerWidth - approxWidth) / 2)),
-    y: 72,
+    x: Math.round(Math.max(pad, (window.innerWidth - 420) / 2)),
+    y: Math.round(Math.max(pad, window.innerHeight - 72 - pad)),
   };
 }
 
@@ -48,206 +44,237 @@ type FloatingDesktopToolbarProps = {
 };
 
 /**
- * Draggable desktop shape toolbar with optional collapsed “ball” state.
- * Position and collapsed flag persist in localStorage.
+ * Draggable desktop shape toolbar with edge-docking.
+ * All drag + dock logic uses direct DOM manipulation for reliability.
  */
 export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
   children,
   zenModeEnabled,
 }) => {
   const rootRef = useRef<HTMLDivElement>(null);
-  const dragStartRef = useRef<{
-    originX: number;
-    originY: number;
-    pointerX: number;
-    pointerY: number;
-  } | null>(null);
 
-  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+  // Only used for initial render — all subsequent updates go through DOM directly
+  const [initialPos] = useState(() => {
     const s = readStored();
-    if (typeof s.x === "number" && typeof s.y === "number") {
-      return { x: s.x, y: s.y };
-    }
+    if (typeof s.x === "number" && typeof s.y === "number") return { x: s.x, y: s.y };
     return defaultPosition();
   });
 
-  const [collapsed, setCollapsed] = useState(() => {
+  const [initialDock] = useState<DockSide>(() => {
     const s = readStored();
-    return typeof s.collapsed === "boolean" ? s.collapsed : false;
+    return s.dockSide === "left" || s.dockSide === "right" ? s.dockSide : null;
   });
 
-  const [dragging, setDragging] = useState(false);
+  // All mutable state lives in refs — NO React state updates for drag/dock
+  const posRef = useRef({ ...initialPos });
+  const dockRef = useRef<DockSide>(initialDock);
+  const dragRef = useRef<{
+    ox: number; oy: number; px: number; py: number; moved: boolean;
+  } | null>(null);
+  const blockClickRef = useRef(false);
 
-  useEffect(() => {
-    const payload: Stored = { ...pos, collapsed };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore quota / private mode
-    }
-  }, [pos, collapsed]);
+  // ---- Direct DOM helpers ----
+  const applyPosition = (el: HTMLElement, x: number, y: number) => {
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+  };
 
-  const clampToViewport = useCallback(() => {
-    const el = rootRef.current;
-    if (!el) {
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    const margin = 8;
-    const maxX = window.innerWidth - rect.width - margin;
-    const maxY = window.innerHeight - rect.height - margin;
-    setPos((p) => ({
-      x: clamp(p.x, margin, Math.max(margin, maxX)),
-      y: clamp(p.y, margin, Math.max(margin, maxY)),
-    }));
-  }, []);
+  const applyDockClass = (el: HTMLElement, side: DockSide) => {
+    el.classList.remove(
+      "floating-desktop-toolbar--docked-left",
+      "floating-desktop-toolbar--docked-right",
+    );
+    if (side === "left") el.classList.add("floating-desktop-toolbar--docked-left");
+    if (side === "right") el.classList.add("floating-desktop-toolbar--docked-right");
+  };
 
-  useEffect(() => {
-    const onResize = () => clampToViewport();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [clampToViewport]);
-
-  useEffect(() => {
-    clampToViewport();
-  }, [collapsed, clampToViewport]);
-
-  useEffect(() => {
-    if (!dragging) {
-      return;
-    }
-
-    const onMove = (e: PointerEvent) => {
-      const d = dragStartRef.current;
-      const el = rootRef.current;
-      if (!d || !el) {
-        return;
-      }
-      const dx = e.clientX - d.pointerX;
-      const dy = e.clientY - d.pointerY;
-      const rect = el.getBoundingClientRect();
-      const margin = 8;
-      const maxX = window.innerWidth - rect.width - margin;
-      const maxY = window.innerHeight - rect.height - margin;
-      setPos({
-        x: clamp(d.originX + dx, margin, Math.max(margin, maxX)),
-        y: clamp(d.originY + dy, margin, Math.max(margin, maxY)),
+  const snapToEdge = (el: HTMLElement, side: DockSide) => {
+    if (!side) return;
+    // Double-rAF: first frame lets flex-direction:column take effect,
+    // second frame forces a full layout reflow so getBoundingClientRect()
+    // returns the final vertical dimensions — not the pre-dock horizontal ones.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const m = 8;
+        const rect = el.getBoundingClientRect();
+        const maxX = Math.max(m, window.innerWidth - rect.width - m);
+        const maxY = Math.max(m, window.innerHeight - rect.height - m);
+        const x = side === "left" ? m : maxX;
+        const y = clamp(posRef.current.y, m, maxY);
+        posRef.current = { x, y };
+        // Animate the final snap-to-edge movement
+        el.style.transition =
+          "left 0.28s cubic-bezier(0.4,0,0.2,1), top 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.5s ease-in-out";
+        applyPosition(el, x, y);
+        persist({ ...posRef.current, dockSide: dockRef.current });
+        // Clear inline transition after animation completes so opacity still works via CSS
+        setTimeout(() => {
+          el.style.transition = "";
+        }, 320);
       });
+    });
+  };
+
+  // ---- Setup: apply initial state + attach drag listeners ----
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+
+    // Apply initial state
+    applyPosition(el, posRef.current.x, posRef.current.y);
+    applyDockClass(el, dockRef.current);
+    if (dockRef.current) {
+      snapToEdge(el, dockRef.current);
+    }
+
+    // ---- Mouse handlers ----
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // Kill any CSS transition so position follows cursor with zero lag
+      el.style.transition = "opacity 0.5s ease-in-out";
+      dragRef.current = {
+        ox: posRef.current.x,
+        oy: posRef.current.y,
+        px: e.clientX,
+        py: e.clientY,
+        moved: false,
+      };
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
     };
 
-    const onUp = () => {
-      dragStartRef.current = null;
-      setDragging(false);
-    };
+    const onMouseMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
 
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-  }, [dragging]);
+      const dx = e.clientX - d.px;
+      const dy = e.clientY - d.py;
 
-  const onDragHandlePointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (e.button !== 0) {
+      if (!d.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) {
         return;
       }
+
+      if (!d.moved) {
+        d.moved = true;
+        // Undock on drag start
+        dockRef.current = null;
+        applyDockClass(el, null);
+      }
+
+      const m = 8;
+      const rect = el.getBoundingClientRect();
+      const maxX = Math.max(m, window.innerWidth - rect.width - m);
+      const maxY = Math.max(m, window.innerHeight - rect.height - m);
+      const nx = clamp(d.ox + dx, m, maxX);
+      const ny = clamp(d.oy + dy, m, maxY);
+
+      posRef.current = { x: nx, y: ny };
+      applyPosition(el, nx, ny);
+
       e.preventDefault();
-      e.stopPropagation();
-      dragStartRef.current = {
-        originX: pos.x,
-        originY: pos.y,
-        pointerX: e.clientX,
-        pointerY: e.clientY,
-      };
-      setDragging(true);
-    },
-    [pos.x, pos.y],
-  );
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+
+      const d = dragRef.current;
+      dragRef.current = null;
+      if (!d || !d.moved) {
+        // Restore default transition even if no drag happened
+        el.style.transition = "";
+        return;
+      }
+
+      blockClickRef.current = true;
+      setTimeout(() => { blockClickRef.current = false; }, 0);
+
+      // Detect dock: 15% zones OR toolbar physically against wall
+      const leftBound = window.innerWidth * 0.15;
+      const rightBound = window.innerWidth * 0.85;
+      let side: DockSide = null;
+
+      if (e.clientX <= leftBound) {
+        side = "left";
+      } else if (e.clientX >= rightBound) {
+        side = "right";
+      }
+
+      // Also check toolbar physical position as fallback
+      if (!side) {
+        const rect = el.getBoundingClientRect();
+        if (rect.left <= 30) side = "left";
+        else if (rect.right >= window.innerWidth - 30) side = "right";
+      }
+
+      // Apply dock class first — CSS flex-direction:column kicks in immediately
+      dockRef.current = side;
+      applyDockClass(el, side);
+      persist({ ...posRef.current, dockSide: side });
+
+      if (side) {
+        // snapToEdge handles its own animated transition internally
+        snapToEdge(el, side);
+      } else {
+        // No dock — restore base CSS transition
+        el.style.transition = "";
+      }
+    };
+
+    // Capture phase so we get mousedown before tool buttons consume it
+    el.addEventListener("mousedown", onMouseDown, { capture: true });
+
+    // Click blocking after drag
+    const onClickCapture = (e: MouseEvent) => {
+      if (blockClickRef.current) {
+        e.stopPropagation();
+        e.preventDefault();
+        blockClickRef.current = false;
+      }
+    };
+    el.addEventListener("click", onClickCapture, { capture: true });
+
+    // Resize handler
+    const onResize = () => {
+      const rect = el.getBoundingClientRect();
+      const m = 8;
+      const maxX = Math.max(m, window.innerWidth - rect.width - m);
+      const maxY = Math.max(m, window.innerHeight - rect.height - m);
+      const ds = dockRef.current;
+      let x = clamp(posRef.current.x, m, maxX);
+      if (ds === "left") x = m;
+      if (ds === "right") x = maxX;
+      const y = clamp(posRef.current.y, m, maxY);
+      posRef.current = { x, y };
+      applyPosition(el, x, y);
+    };
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      el.removeEventListener("mousedown", onMouseDown, { capture: true });
+      el.removeEventListener("click", onClickCapture, { capture: true });
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
 
   return (
     <div
       ref={rootRef}
       className={clsx("floating-desktop-toolbar", {
-        "floating-desktop-toolbar--collapsed": collapsed,
         "floating-desktop-toolbar--zen": zenModeEnabled,
+        "floating-desktop-toolbar--docked-left": initialDock === "left",
+        "floating-desktop-toolbar--docked-right": initialDock === "right",
       })}
-      style={{ left: pos.x, top: pos.y }}
+      style={{ left: initialPos.x, top: initialPos.y }}
     >
-      {!collapsed && (
-        <div className="floating-desktop-toolbar__inner">
-          <Island padding={0} className="floating-desktop-toolbar__chrome">
-            <button
-              type="button"
-              className="floating-desktop-toolbar__chrome-hit"
-              aria-label="Drag toolbar — hover for more options"
-              title="Drag — hover for options"
-              onPointerDown={onDragHandlePointerDown}
-            >
-              <span
-                className="floating-desktop-toolbar__chrome-pebble"
-                aria-hidden={true}
-              />
-            </button>
-            <div className="floating-desktop-toolbar__chrome-menu">
-              <Stack.Col gap={1} align="center">
-                <button
-                  type="button"
-                  className="floating-desktop-toolbar__icon-button"
-                  aria-label="Drag toolbar"
-                  title="Drag toolbar"
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    onDragHandlePointerDown(e);
-                  }}
-                >
-                  {DotsIcon}
-                </button>
-                <button
-                  type="button"
-                  className="floating-desktop-toolbar__icon-button"
-                  aria-label="Minimize toolbar"
-                  title="Minimize toolbar"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCollapsed(true);
-                  }}
-                >
-                  {collapseDownIcon}
-                </button>
-              </Stack.Col>
-            </div>
-          </Island>
-          {children}
-        </div>
-      )}
-      {collapsed && (
-        <Island padding={1} className="floating-desktop-toolbar__ball">
-          <Stack.Col gap={1} align="center">
-            <button
-              type="button"
-              className="floating-desktop-toolbar__icon-button"
-              aria-label="Drag toolbar"
-              title="Drag toolbar"
-              onPointerDown={onDragHandlePointerDown}
-            >
-              {DotsIcon}
-            </button>
-            <button
-              type="button"
-              className="floating-desktop-toolbar__icon-button floating-desktop-toolbar__expand"
-              aria-label="Expand toolbar"
-              title="Expand toolbar"
-              onClick={() => setCollapsed(false)}
-            >
-              {PlusIcon}
-            </button>
-          </Stack.Col>
-        </Island>
-      )}
+      <div
+        className="floating-desktop-toolbar__inner"
+        style={{ touchAction: "none" }}
+      >
+        {children}
+      </div>
     </div>
   );
 };

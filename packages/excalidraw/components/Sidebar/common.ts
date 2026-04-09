@@ -27,6 +27,16 @@ export type SidebarProps<P = {}> = {
   onDock?: (docked: boolean) => void;
   docked?: boolean;
   className?: string;
+  /**
+   * When false, clicks outside the sidebar do not close it (use header close only).
+   * @default true
+   */
+  closeOnOutsideClick?: boolean;
+  /**
+   * When false, Escape does not close the sidebar.
+   * @default true
+   */
+  closeOnEscape?: boolean;
   // NOTE sidebars we use internally inside the editor must have this flag set.
   // It indicates that this sidebar should have lower precedence over host
   // sidebars, if both are open.
