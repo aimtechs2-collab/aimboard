@@ -13,7 +13,7 @@ import "./ToolPopover.scss";
 
 import { useExcalidrawContainer } from "./App";
 
-import type { AppClassProperties } from "../types";
+import type { AppClassProperties, ToolType } from "../types";
 
 type ToolOption = {
   type: string;
@@ -33,6 +33,12 @@ type ToolPopoverProps = {
   onToolChange: (type: string) => void;
   displayedOption: ToolOption;
   fillable?: boolean;
+  /** Double-click opens tool-options popover anchored to this control */
+  onOptionsDoubleClick?: (detail: {
+    anchor: HTMLElement;
+    toolType: ToolType;
+  }) => void;
+  optionsToolTypeForDoubleClick?: ToolType;
 };
 
 export const ToolPopover = ({
@@ -47,6 +53,8 @@ export const ToolPopover = ({
   onToolChange,
   displayedOption,
   fillable = false,
+  onOptionsDoubleClick,
+  optionsToolTypeForDoubleClick,
 }: ToolPopoverProps) => {
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const currentType = activeTool.type;
@@ -87,6 +95,19 @@ export const ToolPopover = ({
             setIsPopupOpen((v) => !v);
             onToolChange(defaultOption);
           }}
+          onDoubleClick={
+            onOptionsDoubleClick && optionsToolTypeForDoubleClick
+              ? (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsPopupOpen(false);
+                  onOptionsDoubleClick({
+                    anchor: e.currentTarget,
+                    toolType: optionsToolTypeForDoubleClick,
+                  });
+                }
+              : undefined
+          }
         />
       </Popover.Trigger>
 

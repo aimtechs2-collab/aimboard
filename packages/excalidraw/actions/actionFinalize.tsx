@@ -280,18 +280,16 @@ export const actionFinalize = register<FormData>({
       resetCursor(interactiveCanvas);
     }
 
-    let activeTool: AppState["activeTool"];
+    let nextActiveTool: AppState["activeTool"];
     if (appState.activeTool.type === "eraser") {
-      activeTool = updateActiveTool(appState, {
+      nextActiveTool = updateActiveTool(appState, {
         ...(appState.activeTool.lastActiveTool || {
           type: app.state.preferredSelectionTool.type,
         }),
         lastActiveToolBeforeEraser: null,
       });
     } else {
-      activeTool = updateActiveTool(appState, {
-        type: app.state.preferredSelectionTool.type,
-      });
+      nextActiveTool = appState.activeTool;
     }
 
     let selectedLinearElement =
@@ -318,12 +316,7 @@ export const actionFinalize = register<FormData>({
       appState: {
         ...appState,
         cursorButton: "up",
-        activeTool:
-          (appState.activeTool.locked ||
-            appState.activeTool.type === "freedraw") &&
-          element
-            ? appState.activeTool
-            : activeTool,
+        activeTool: nextActiveTool,
         activeEmbeddable: null,
         newElement: null,
         selectionElement: null,

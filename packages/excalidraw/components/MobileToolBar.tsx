@@ -1,3 +1,4 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useState, useEffect } from "react";
 import clsx from "clsx";
 
@@ -9,6 +10,7 @@ import { t } from "../i18n";
 
 import { isHandToolActive } from "../appState";
 
+import { useToolOptionsPopover } from "../context/toolOptionsPopover";
 import { useTunnels } from "../context/tunnels";
 
 import { HandButton } from "./HandButton";
@@ -39,7 +41,7 @@ import {
 import "./ToolIcon.scss";
 import "./MobileToolBar.scss";
 
-import type { AppClassProperties, ToolType, UIAppState } from "../types";
+import type { AppClassProperties, AppState, ToolType } from "../types";
 
 const SHAPE_TOOLS = [
   {
@@ -84,7 +86,7 @@ const LINEAR_ELEMENT_TOOLS = [
 type MobileToolBarProps = {
   app: AppClassProperties;
   onHandToolToggle: () => void;
-  setAppState: React.Component<any, UIAppState>["setState"];
+  setAppState: React.Component<any, AppState>["setState"];
 };
 
 export const MobileToolBar = ({
@@ -124,6 +126,20 @@ export const MobileToolBar = ({
   const embeddableToolSelected = activeTool.type === "embeddable";
 
   const { TTDDialogTriggerTunnel } = useTunnels();
+  const { open: openToolOptionsPopover } = useToolOptionsPopover();
+
+  const openToolStylePopover = (
+    e: ReactMouseEvent<HTMLLabelElement>,
+    toolType: ToolType,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setAppState({ openPopup: null });
+    if (app.state.activeTool.type !== toolType) {
+      app.setActiveTool({ type: toolType });
+    }
+    openToolOptionsPopover(toolType, e.currentTarget);
+  };
 
   const handleToolChange = (toolType: string, pointerType?: string) => {
     if (app.state.activeTool.type !== toolType) {
@@ -229,6 +245,21 @@ export const MobileToolBar = ({
             (tool) => tool.type === app.state.preferredSelectionTool.type,
           ) || SELECTION_TOOLS[0]
         }
+        optionsToolTypeForDoubleClick={
+          activeTool.type === "selection" || activeTool.type === "lasso"
+            ? activeTool.type
+            : app.state.preferredSelectionTool.type
+        }
+        onOptionsDoubleClick={({ anchor, toolType }) => {
+          setAppState({ openPopup: null });
+          if (toolType === "selection" || toolType === "lasso") {
+            app.setActiveTool({ type: toolType });
+            setAppState({
+              preferredSelectionTool: { type: toolType, initialized: true },
+            });
+          }
+          openToolOptionsPopover(toolType, anchor);
+        }}
       />
 
       {/* Free Draw */}
@@ -244,6 +275,7 @@ export const MobileToolBar = ({
         aria-label={capitalizeString(t("toolBar.freedraw"))}
         data-testid="toolbar-freedraw"
         onChange={() => handleToolChange("freedraw")}
+        onDoubleClick={(e) => openToolStylePopover(e, "freedraw")}
       />
 
       {/* Eraser */}
@@ -259,6 +291,7 @@ export const MobileToolBar = ({
         aria-label={capitalizeString(t("toolBar.eraser"))}
         data-testid="toolbar-eraser"
         onChange={() => handleToolChange("eraser")}
+        onDoubleClick={(e) => openToolStylePopover(e, "eraser")}
       />
 
       {/* Rectangle */}
@@ -294,6 +327,13 @@ export const MobileToolBar = ({
           SHAPE_TOOLS.find((tool) => tool.type === lastActiveGenericShape) ||
           SHAPE_TOOLS[0]
         }
+        optionsToolTypeForDoubleClick={lastActiveGenericShape}
+        onOptionsDoubleClick={({ anchor, toolType }) => {
+          setAppState({ openPopup: null });
+          app.setActiveTool({ type: toolType });
+          setLastActiveGenericShape(toolType as "rectangle" | "diamond" | "ellipse");
+          openToolOptionsPopover(toolType, anchor);
+        }}
       />
 
       {/* Arrow/Line */}
@@ -323,6 +363,13 @@ export const MobileToolBar = ({
             (tool) => tool.type === lastActiveLinearElement,
           ) || LINEAR_ELEMENT_TOOLS[0]
         }
+        optionsToolTypeForDoubleClick={lastActiveLinearElement}
+        onOptionsDoubleClick={({ anchor, toolType }) => {
+          setAppState({ openPopup: null });
+          app.setActiveTool({ type: toolType });
+          setLastActiveLinearElement(toolType as "arrow" | "line");
+          openToolOptionsPopover(toolType, anchor);
+        }}
       />
 
       {/* Text Tool */}
@@ -339,6 +386,7 @@ export const MobileToolBar = ({
           aria-label={capitalizeString(t("toolBar.text"))}
           data-testid="toolbar-text"
           onChange={() => handleToolChange("text")}
+          onDoubleClick={(e) => openToolStylePopover(e, "text")}
         />
       )}
 
@@ -356,6 +404,7 @@ export const MobileToolBar = ({
           aria-label={capitalizeString(t("toolBar.image"))}
           data-testid="toolbar-image"
           onChange={() => handleToolChange("image")}
+          onDoubleClick={(e) => openToolStylePopover(e, "image")}
         />
       )}
 
@@ -371,6 +420,7 @@ export const MobileToolBar = ({
           aria-label={capitalizeString(t("toolBar.frame"))}
           data-testid="toolbar-frame"
           onChange={() => handleToolChange("frame")}
+          onDoubleClick={(e) => openToolStylePopover(e, "frame")}
         />
       )}
 

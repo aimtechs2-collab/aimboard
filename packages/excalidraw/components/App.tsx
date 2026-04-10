@@ -6932,9 +6932,6 @@ class App extends React.Component<AppProps, AppState> {
             resetCursor(this.interactiveCanvas);
             this.setState((prevState) => ({
               newElement: null,
-              activeTool: updateActiveTool(this.state, {
-                type: this.state.preferredSelectionTool.type,
-              }),
               selectedElementIds: makeNextSelectedElementIds(
                 {
                   ...prevState.selectedElementIds,
@@ -8780,13 +8777,6 @@ class App extends React.Component<AppProps, AppState> {
     });
 
     resetCursor(this.interactiveCanvas);
-    if (!this.state.activeTool.locked) {
-      this.setState({
-        activeTool: updateActiveTool(this.state, {
-          type: this.state.preferredSelectionTool.type,
-        }),
-      });
-    }
   };
 
   private handleFreeDrawElementOnPointerDown = (
@@ -10710,9 +10700,6 @@ class App extends React.Component<AppProps, AppState> {
             resetCursor(this.interactiveCanvas);
             this.setState((prevState) => ({
               newElement: null,
-              activeTool: updateActiveTool(this.state, {
-                type: this.state.preferredSelectionTool.type,
-              }),
               selectedElementIds: makeNextSelectedElementIds(
                 {
                   ...prevState.selectedElementIds,
@@ -11347,19 +11334,11 @@ class App extends React.Component<AppProps, AppState> {
           (activeTool.type === "lasso" && activeTool.fromSelection))
       ) {
         resetCursor(this.interactiveCanvas);
-        this.setState({
-          newElement: null,
-          suggestedBinding: null,
-          activeTool: updateActiveTool(this.state, {
-            type: this.state.preferredSelectionTool.type,
-          }),
-        });
-      } else {
-        this.setState({
-          newElement: null,
-          suggestedBinding: null,
-        });
       }
+      this.setState({
+        newElement: null,
+        suggestedBinding: null,
+      });
     });
   }
 

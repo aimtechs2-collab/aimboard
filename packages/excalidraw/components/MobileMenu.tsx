@@ -7,7 +7,7 @@ import { t } from "../i18n";
 import { calculateScrollCenter } from "../scene";
 import { SCROLLBAR_WIDTH, SCROLLBAR_MARGIN } from "../scene/scrollbars";
 
-import { ExitViewModeButton, MobileShapeActions } from "./Actions";
+import { ExitViewModeButton } from "./Actions";
 import { MobileToolBar } from "./MobileToolBar";
 import { FixedSideContainer } from "./FixedSideContainer";
 
@@ -141,14 +141,6 @@ export const MobileMenu = ({
             marginBottom: SCROLLBAR_WIDTH + SCROLLBAR_MARGIN,
           }}
         >
-          <MobileShapeActions
-            appState={appState}
-            elementsMap={app.scene.getNonDeletedElementsMap()}
-            renderAction={actionManager.renderAction}
-            app={app}
-            setAppState={setAppState}
-          />
-
           <Island className="App-toolbar">
             {!appState.viewModeEnabled &&
               appState.openDialog?.name !== "elementLinkSelector" &&

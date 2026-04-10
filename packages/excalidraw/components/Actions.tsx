@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useRef, useState } from "react";
 import { Popover } from "radix-ui";
 
@@ -34,6 +35,7 @@ import { actionToggleZenMode } from "../actions";
 import { alignActionsPredicate } from "../actions/actionAlign";
 import { trackEvent } from "../analytics";
 import { useTunnels } from "../context/tunnels";
+import { useToolOptionsPopover } from "../context/toolOptionsPopover";
 
 import { t } from "../i18n";
 import {
@@ -89,9 +91,11 @@ import { Island } from "./Island";
 import type {
   AppClassProperties,
   AppProps,
+  AppState,
+  ElementOrToolType,
+  ToolType,
   UIAppState,
   Zoom,
-  AppState,
 } from "../types";
 import type { ActionManager } from "../actions/manager";
 
@@ -104,7 +108,9 @@ const PROPERTIES_CLASSES = clsx([
 export const canChangeStrokeColor = (
   appState: UIAppState,
   targetElements: ExcalidrawElement[],
+  styleToolType?: ElementOrToolType,
 ) => {
+  const toolT = styleToolType ?? appState.activeTool.type;
   let commonSelectedType: ExcalidrawElementType | null =
     targetElements[0]?.type || null;
 
@@ -116,7 +122,7 @@ export const canChangeStrokeColor = (
   }
 
   return (
-    (hasStrokeColor(appState.activeTool.type) &&
+    (hasStrokeColor(toolT) &&
       commonSelectedType !== "image" &&
       commonSelectedType !== "frame" &&
       commonSelectedType !== "magicframe") ||
@@ -127,9 +133,11 @@ export const canChangeStrokeColor = (
 export const canChangeBackgroundColor = (
   appState: UIAppState,
   targetElements: ExcalidrawElement[],
+  styleToolType?: ElementOrToolType,
 ) => {
+  const toolT = styleToolType ?? appState.activeTool.type;
   return (
-    hasBackground(appState.activeTool.type) ||
+    hasBackground(toolT) ||
     targetElements.some((element) => hasBackground(element.type))
   );
 };
@@ -139,12 +147,17 @@ export const SelectedShapeActions = ({
   elementsMap,
   renderAction,
   app,
+  styleToolOverride,
 }: {
   appState: UIAppState;
   elementsMap: NonDeletedElementsMap | NonDeletedSceneElementsMap;
   renderAction: ActionManager["renderAction"];
   app: AppClassProperties;
+  /** When set (e.g. tool-options popover), gate controls by this tool instead of activeTool */
+  styleToolOverride?: ToolType;
 }) => {
+  const st: ElementOrToolType =
+    styleToolOverride ?? appState.activeTool.type;
   const targetElements = getTargetElements(elementsMap, appState);
 
   let isSingleElementBoundContainer = false;
@@ -162,8 +175,7 @@ export const SelectedShapeActions = ({
   const isRTL = document.documentElement.getAttribute("dir") === "rtl";
 
   const showFillIcons =
-    (hasBackground(appState.activeTool.type) &&
-      !isTransparent(appState.currentItemBackgroundColor)) ||
+    (hasBackground(st) && !isTransparent(appState.currentItemBackgroundColor)) ||
     targetElements.some(
       (element) =>
         hasBackground(element.type) && !isTransparent(element.backgroundColor),
@@ -189,23 +201,23 @@ export const SelectedShapeActions = ({
   return (
     <div className="selected-shape-actions">
       <div>
-        {canChangeStrokeColor(appState, targetElements) &&
+        {canChangeStrokeColor(appState, targetElements, st) &&
           renderAction("changeStrokeColor")}
       </div>
-      {canChangeBackgroundColor(appState, targetElements) && (
+      {canChangeBackgroundColor(appState, targetElements, st) && (
         <div>{renderAction("changeBackgroundColor")}</div>
       )}
       {showFillIcons && renderAction("changeFillStyle")}
 
-      {(hasStrokeWidth(appState.activeTool.type) ||
+      {(hasStrokeWidth(st) ||
         targetElements.some((element) => hasStrokeWidth(element.type))) &&
         renderAction("changeStrokeWidth")}
 
-      {(appState.activeTool.type === "freedraw" ||
+      {(st === "freedraw" ||
         targetElements.some((element) => element.type === "freedraw")) &&
         renderAction("changeStrokeShape")}
 
-      {(hasStrokeStyle(appState.activeTool.type) ||
+      {(hasStrokeStyle(st) ||
         targetElements.some((element) => hasStrokeStyle(element.type))) && (
         <>
           {renderAction("changeStrokeStyle")}
@@ -213,22 +225,21 @@ export const SelectedShapeActions = ({
         </>
       )}
 
-      {(canChangeRoundness(appState.activeTool.type) ||
+      {(canChangeRoundness(st) ||
         targetElements.some((element) => canChangeRoundness(element.type))) && (
         <>{renderAction("changeRoundness")}</>
       )}
 
-      {(toolIsArrow(appState.activeTool.type) ||
+      {(toolIsArrow(st) ||
         targetElements.some((element) => toolIsArrow(element.type))) && (
         <>{renderAction("changeArrowType")}</>
       )}
 
-      {(appState.activeTool.type === "text" ||
-        targetElements.some(isTextElement)) && (
+      {(st === "text" || targetElements.some(isTextElement)) && (
         <>
           <fieldset>{renderAction("changeFontFamily")}</fieldset>
           {renderAction("changeFontSize")}
-          {(appState.activeTool.type === "text" ||
+          {(st === "text" ||
             suppportsHorizontalAlign(targetElements, elementsMap)) &&
             renderAction("changeTextAlign")}
         </>
@@ -236,7 +247,7 @@ export const SelectedShapeActions = ({
 
       {shouldAllowVerticalAlign(targetElements, elementsMap) &&
         renderAction("changeVerticalAlign")}
-      {(canHaveArrowheads(appState.activeTool.type) ||
+      {(canHaveArrowheads(st) ||
         targetElements.some((element) => canHaveArrowheads(element.type))) && (
         <>{renderAction("changeArrowhead")}</>
       )}
@@ -321,16 +332,18 @@ const CombinedShapeProperties = ({
   setAppState,
   targetElements,
   container,
+  styleToolType,
 }: {
   targetElements: ExcalidrawElement[];
   appState: UIAppState;
   renderAction: ActionManager["renderAction"];
   setAppState: React.Component<any, AppState>["setState"];
   container: HTMLDivElement | null;
+  styleToolType?: ElementOrToolType;
 }) => {
+  const st: ElementOrToolType = styleToolType ?? appState.activeTool.type;
   const showFillIcons =
-    (hasBackground(appState.activeTool.type) &&
-      !isTransparent(appState.currentItemBackgroundColor)) ||
+    (hasBackground(st) && !isTransparent(appState.currentItemBackgroundColor)) ||
     targetElements.some(
       (element) =>
         hasBackground(element.type) && !isTransparent(element.backgroundColor),
@@ -338,11 +351,11 @@ const CombinedShapeProperties = ({
 
   const shouldShowCombinedProperties =
     targetElements.length > 0 ||
-    (appState.activeTool.type !== "selection" &&
-      appState.activeTool.type !== "eraser" &&
-      appState.activeTool.type !== "hand" &&
-      appState.activeTool.type !== "laser" &&
-      appState.activeTool.type !== "lasso");
+    (st !== "selection" &&
+      st !== "eraser" &&
+      st !== "hand" &&
+      st !== "laser" &&
+      st !== "lasso");
   const isOpen = appState.openPopup === "compactStrokeStyles";
 
   if (!shouldShowCombinedProperties) {
@@ -352,6 +365,7 @@ const CombinedShapeProperties = ({
   return (
     <div className="compact-action-item">
       <Popover.Root
+        modal={false}
         open={isOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -389,12 +403,12 @@ const CombinedShapeProperties = ({
           >
             <div className="selected-shape-actions">
               {showFillIcons && renderAction("changeFillStyle")}
-              {(hasStrokeWidth(appState.activeTool.type) ||
+              {(hasStrokeWidth(st) ||
                 targetElements.some((element) =>
                   hasStrokeWidth(element.type),
                 )) &&
                 renderAction("changeStrokeWidth")}
-              {(hasStrokeStyle(appState.activeTool.type) ||
+              {(hasStrokeStyle(st) ||
                 targetElements.some((element) =>
                   hasStrokeStyle(element.type),
                 )) && (
@@ -403,7 +417,7 @@ const CombinedShapeProperties = ({
                   {renderAction("changeSloppiness")}
                 </>
               )}
-              {(canChangeRoundness(appState.activeTool.type) ||
+              {(canChangeRoundness(st) ||
                 targetElements.some((element) =>
                   canChangeRoundness(element.type),
                 )) &&
@@ -424,6 +438,7 @@ const CombinedArrowProperties = ({
   targetElements,
   container,
   app,
+  styleToolType,
 }: {
   targetElements: ExcalidrawElement[];
   appState: UIAppState;
@@ -431,9 +446,11 @@ const CombinedArrowProperties = ({
   setAppState: React.Component<any, AppState>["setState"];
   container: HTMLDivElement | null;
   app: AppClassProperties;
+  styleToolType?: ElementOrToolType;
 }) => {
+  const st: ElementOrToolType = styleToolType ?? appState.activeTool.type;
   const showShowArrowProperties =
-    toolIsArrow(appState.activeTool.type) ||
+    toolIsArrow(st) ||
     targetElements.some((element) => toolIsArrow(element.type));
   const isOpen = appState.openPopup === "compactArrowProperties";
 
@@ -444,6 +461,7 @@ const CombinedArrowProperties = ({
   return (
     <div className="compact-action-item">
       <Popover.Root
+        modal={false}
         open={isOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -521,6 +539,7 @@ const CombinedTextProperties = ({
   targetElements,
   container,
   elementsMap,
+  styleToolType,
 }: {
   appState: UIAppState;
   renderAction: ActionManager["renderAction"];
@@ -528,13 +547,16 @@ const CombinedTextProperties = ({
   targetElements: ExcalidrawElement[];
   container: HTMLDivElement | null;
   elementsMap: NonDeletedElementsMap | NonDeletedSceneElementsMap;
+  styleToolType?: ElementOrToolType;
 }) => {
+  const st: ElementOrToolType = styleToolType ?? appState.activeTool.type;
   const { saveCaretPosition, restoreCaretPosition } = useTextEditorFocus();
   const isOpen = appState.openPopup === "compactTextProperties";
 
   return (
     <div className="compact-action-item">
       <Popover.Root
+        modal={false}
         open={isOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -589,10 +611,9 @@ const CombinedTextProperties = ({
             }}
           >
             <div className="selected-shape-actions">
-              {(appState.activeTool.type === "text" ||
-                targetElements.some(isTextElement)) &&
+              {(st === "text" || targetElements.some(isTextElement)) &&
                 renderAction("changeFontSize")}
-              {(appState.activeTool.type === "text" ||
+              {(st === "text" ||
                 suppportsHorizontalAlign(targetElements, elementsMap)) &&
                 renderAction("changeTextAlign")}
               {shouldAllowVerticalAlign(targetElements, elementsMap) &&
@@ -652,6 +673,7 @@ const CombinedExtraActions = ({
   return (
     <div className="compact-action-item">
       <Popover.Root
+        modal={false}
         open={isOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -790,13 +812,17 @@ export const CompactShapeActions = ({
   renderAction,
   app,
   setAppState,
+  styleToolOverride,
 }: {
   appState: UIAppState;
   elementsMap: NonDeletedElementsMap | NonDeletedSceneElementsMap;
   renderAction: ActionManager["renderAction"];
   app: AppClassProperties;
   setAppState: React.Component<any, AppState>["setState"];
+  styleToolOverride?: ToolType;
 }) => {
+  const st: ElementOrToolType =
+    styleToolOverride ?? appState.activeTool.type;
   const targetElements = getTargetElements(elementsMap, appState);
   const { container } = useExcalidrawContainer();
 
@@ -813,14 +839,14 @@ export const CompactShapeActions = ({
   return (
     <div className="compact-shape-actions">
       {/* Stroke Color */}
-      {canChangeStrokeColor(appState, targetElements) && (
+      {canChangeStrokeColor(appState, targetElements, st) && (
         <div className={clsx("compact-action-item")}>
           {renderAction("changeStrokeColor")}
         </div>
       )}
 
       {/* Background Color */}
-      {canChangeBackgroundColor(appState, targetElements) && (
+      {canChangeBackgroundColor(appState, targetElements, st) && (
         <div className="compact-action-item">
           {renderAction("changeBackgroundColor")}
         </div>
@@ -832,6 +858,7 @@ export const CompactShapeActions = ({
         setAppState={setAppState}
         targetElements={targetElements}
         container={container}
+        styleToolType={styleToolOverride}
       />
 
       <CombinedArrowProperties
@@ -841,6 +868,7 @@ export const CompactShapeActions = ({
         targetElements={targetElements}
         container={container}
         app={app}
+        styleToolType={styleToolOverride}
       />
       {/* Linear Editor */}
       {showLineEditorAction && (
@@ -1077,6 +1105,20 @@ export const ShapesSwitcher = ({
   const embeddableToolSelected = activeTool.type === "embeddable";
 
   const { TTDDialogTriggerTunnel } = useTunnels();
+  const { open: openToolOptionsPopover } = useToolOptionsPopover();
+
+  const openToolStylePopover = (
+    e: ReactMouseEvent<HTMLLabelElement>,
+    toolType: ToolType,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setAppState({ openPopup: null });
+    if (app.state.activeTool.type !== toolType) {
+      app.setActiveTool({ type: toolType });
+    }
+    openToolOptionsPopover(toolType, e.currentTarget);
+  };
 
   return (
     <>
@@ -1134,6 +1176,25 @@ export const ShapesSwitcher = ({
                   ) || SELECTION_TOOLS[0]
                 }
                 fillable={activeTool.type === "selection"}
+                optionsToolTypeForDoubleClick={
+                  activeTool.type === "selection" ||
+                  activeTool.type === "lasso"
+                    ? activeTool.type
+                    : app.state.preferredSelectionTool.type
+                }
+                onOptionsDoubleClick={({ anchor, toolType }) => {
+                  setAppState({ openPopup: null });
+                  if (toolType === "selection" || toolType === "lasso") {
+                    app.setActiveTool({ type: toolType });
+                    setAppState({
+                      preferredSelectionTool: {
+                        type: toolType,
+                        initialized: true,
+                      },
+                    });
+                  }
+                  openToolOptionsPopover(toolType, anchor);
+                }}
               />
             );
           }
@@ -1175,6 +1236,23 @@ export const ShapesSwitcher = ({
                 } else {
                   app.setActiveTool({ type: value });
                 }
+              }}
+              onDoubleClick={(e) => {
+                const toolType = value as ToolType;
+                if (value === "selection") {
+                  const t =
+                    activeTool.type === "selection" ||
+                    activeTool.type === "lasso"
+                      ? activeTool.type
+                      : "selection";
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setAppState({ openPopup: null });
+                  app.setActiveTool({ type: t });
+                  openToolOptionsPopover(t, e.currentTarget);
+                  return;
+                }
+                openToolStylePopover(e, toolType);
               }}
             />
           );

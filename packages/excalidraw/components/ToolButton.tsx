@@ -58,6 +58,7 @@ type ToolButtonProps =
       checked: boolean;
       onChange?(data: { pointerType: PointerType | null }): void;
       onPointerDown?(data: { pointerType: PointerType }): void;
+      onDoubleClick?(event: React.MouseEvent<HTMLLabelElement>): void;
     });
 
 export const ToolButton = React.forwardRef(
@@ -179,6 +180,9 @@ export const ToolButton = React.forwardRef(
           requestAnimationFrame(() => {
             lastPointerTypeRef.current = null;
           });
+        }}
+        onDoubleClick={(event) => {
+          props.onDoubleClick?.(event);
         }}
       >
         <input

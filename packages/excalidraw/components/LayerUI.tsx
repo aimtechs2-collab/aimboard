@@ -2,7 +2,6 @@ import clsx from "clsx";
 import React from "react";
 
 import {
-  CLASSES,
   DEFAULT_SIDEBAR,
   TOOL_TYPE,
   arrayToMap,
@@ -12,14 +11,13 @@ import {
 
 import { mutateElement } from "@excalidraw/element";
 
-import { showSelectedShapeActions } from "@excalidraw/element";
-
 import { ShapeCache } from "@excalidraw/element";
 
 import type { NonDeletedExcalidrawElement } from "@excalidraw/element/types";
 
 import { actionToggleStats } from "../actions";
 import { trackEvent } from "../analytics";
+import { ToolOptionsPopoverProvider } from "../context/toolOptionsPopover";
 import { TunnelsContext, useInitializeTunnels } from "../context/tunnels";
 import { UIAppStateContext } from "../context/ui-appState";
 import { useAtom, useAtomValue } from "../editor-jotai";
@@ -27,11 +25,7 @@ import { useAtom, useAtomValue } from "../editor-jotai";
 import { t } from "../i18n";
 import { calculateScrollCenter } from "../scene";
 
-import {
-  SelectedShapeActions,
-  ShapesSwitcher,
-  CompactShapeActions,
-} from "./Actions";
+import { ShapesSwitcher } from "./Actions";
 import { LoadingMessage } from "./LoadingMessage";
 import { LockButton } from "./LockButton";
 import { MobileMenu } from "./MobileMenu";
@@ -62,6 +56,7 @@ import { Island } from "./Island";
 import { JSONExportDialog } from "./JSONExportDialog";
 import { LaserPointerButton } from "./LaserPointerButton";
 import { Toast } from "./Toast";
+import { ToolOptionsPopover } from "./ToolOptionsPopover";
 
 import "./LayerUI.scss";
 import "./Toolbar.scss";
@@ -138,7 +133,7 @@ const DefaultOverwriteConfirmDialog = () => {
   );
 };
 
-const LayerUI = ({
+const LayerUIInner = ({
   actionManager,
   appState,
   files,
@@ -235,62 +230,7 @@ const LayerUI = ({
     </div>
   );
 
-  const renderSelectedShapeActions = () => {
-    const isCompactMode = isCompactStylesPanel;
-
-    return (
-      <Section
-        heading="selectedShapeActions"
-        className={clsx("selected-shape-actions zen-mode-transition", {
-          "transition-left": appState.zenModeEnabled,
-        })}
-      >
-        {isCompactMode ? (
-          <Island
-            className={clsx("compact-shape-actions-island")}
-            padding={0}
-            style={{
-              // we want to make sure this doesn't overflow so subtracting the
-              // approximate height of hamburgerMenu + footer
-              maxHeight: `${appState.height - 166}px`,
-            }}
-          >
-            <CompactShapeActions
-              appState={appState}
-              elementsMap={app.scene.getNonDeletedElementsMap()}
-              renderAction={actionManager.renderAction}
-              app={app}
-              setAppState={setAppState}
-            />
-          </Island>
-        ) : (
-          <Island
-            className={CLASSES.SHAPE_ACTIONS_MENU}
-            padding={2}
-            style={{
-              // we want to make sure this doesn't overflow so subtracting the
-              // approximate height of hamburgerMenu + footer
-              maxHeight: `${appState.height - 166}px`,
-            }}
-          >
-            <SelectedShapeActions
-              appState={appState}
-              elementsMap={app.scene.getNonDeletedElementsMap()}
-              renderAction={actionManager.renderAction}
-              app={app}
-            />
-          </Island>
-        )}
-      </Section>
-    );
-  };
-
   const renderFixedSideContainer = () => {
-    const shouldRenderSelectedShapeActions = showSelectedShapeActions(
-      appState,
-      elements,
-    );
-
     const shouldShowStats =
       appState.stats.open &&
       !appState.zenModeEnabled &&
@@ -305,14 +245,6 @@ const LayerUI = ({
             className={clsx("App-menu_top__left")}
           >
             {renderCanvasActions()}
-            <div
-              className={clsx("selected-shape-actions-container", {
-                "selected-shape-actions-container--compact":
-                  isCompactStylesPanel,
-              })}
-            >
-              {shouldRenderSelectedShapeActions && renderSelectedShapeActions()}
-            </div>
           </Stack.Col>
           {!appState.viewModeEnabled &&
             appState.openDialog?.name !== "elementLinkSelector" && (
@@ -585,6 +517,12 @@ const LayerUI = ({
           }
         />
       )}
+      <ToolOptionsPopover
+        appState={appState}
+        app={app}
+        setAppState={setAppState}
+        actionManager={actionManager}
+      />
       {editorInterface.formFactor === "phone" && (
         <MobileMenu
           app={app}
@@ -695,4 +633,12 @@ const areEqual = (prevProps: LayerUIProps, nextProps: LayerUIProps) => {
   );
 };
 
-export default React.memo(LayerUI, areEqual);
+const LayerUIMemo = React.memo(LayerUIInner, areEqual);
+
+const LayerUI = (props: LayerUIProps) => (
+  <ToolOptionsPopoverProvider>
+    <LayerUIMemo {...props} />
+  </ToolOptionsPopoverProvider>
+);
+
+export default LayerUI;

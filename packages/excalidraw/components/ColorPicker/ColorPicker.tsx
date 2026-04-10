@@ -332,6 +332,7 @@ export const ColorPicker = ({
         )}
         {!isCompactMode && <ButtonSeparator />}
         <Popover.Root
+          modal={false}
           open={appState.openPopup === type}
           onOpenChange={(open) => {
             if (open) {
