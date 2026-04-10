@@ -27,9 +27,15 @@ dotenv.config({ path: path.join(__dirname, ".env.local") });
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const isProduction = process.env.NODE_ENV === "production";
-const trustProxy = process.env.TRUST_PROXY === "1";
+/** Render (and similar) sit behind a reverse proxy; rate limiting and IPs need this. */
+const trustProxy =
+  process.env.TRUST_PROXY === "1" || process.env.RENDER === "true";
 
-const PORT = parseInt(process.env.AI_BACKEND_PORT || "3016", 10);
+// Render/Heroku/Railway set PORT; local dev often uses AI_BACKEND_PORT (e.g. 3016).
+const PORT = parseInt(
+  process.env.PORT || process.env.AI_BACKEND_PORT || "3016",
+  10,
+);
 const LISTEN_HOST =
   process.env.AI_BACKEND_HOST ||
   (isProduction ? "0.0.0.0" : "127.0.0.1");
@@ -55,18 +61,34 @@ const pool = new Pool({
       : undefined,
 });
 
+function normalizeCorsOrigin(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.trim().replace(/^\ufeff/, "");
+}
+
 function resolveCorsConfig() {
-  const raw = (process.env.CORS_ORIGINS || "").trim();
+  const raw = normalizeCorsOrigin(process.env.CORS_ORIGINS || "");
   if (raw) {
     const allowed = new Set(
-      raw.split(",").map((s) => s.trim()).filter(Boolean),
+      raw.split(",").map((s) => normalizeCorsOrigin(s)).filter(Boolean),
     );
+    if (isProduction) {
+      console.log(
+        `[aimtutor-ai] CORS: ${allowed.size} allowed origin(s): ${[...allowed].join(", ")}`,
+      );
+    }
     return {
       origin: (origin, cb) => {
-        if (!origin || allowed.has(origin)) {
+        const o = origin ? normalizeCorsOrigin(origin) : origin;
+        if (!o || allowed.has(o)) {
           cb(null, true);
         } else {
-          cb(new Error("Not allowed by CORS"));
+          console.warn(
+            `[aimtutor-ai] CORS rejected Origin=${JSON.stringify(origin)} (normalized=${JSON.stringify(o)})`,
+          );
+          cb(null, false);
         }
       },
     };
