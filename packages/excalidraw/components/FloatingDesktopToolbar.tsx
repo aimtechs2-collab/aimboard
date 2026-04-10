@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 
 import "./FloatingDesktopToolbar.scss";
 
@@ -21,6 +21,15 @@ function readStored(): Partial<Stored> {
   } catch {
     return {};
   }
+}
+
+function isFinitePair(x: unknown, y: unknown): boolean {
+  return (
+    typeof x === "number" &&
+    typeof y === "number" &&
+    Number.isFinite(x) &&
+    Number.isFinite(y)
+  );
 }
 
 function persist(s: Stored) {
@@ -54,9 +63,11 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Only used for initial render — all subsequent updates go through DOM directly
-  const [initialPos] = useState(() => {
+  const [initialPos] = useState((): { x: number; y: number } => {
     const s = readStored();
-    if (typeof s.x === "number" && typeof s.y === "number") return { x: s.x, y: s.y };
+    if (isFinitePair(s.x, s.y)) {
+      return { x: s.x as number, y: s.y as number };
+    }
     return defaultPosition();
   });
 
@@ -66,7 +77,7 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
   });
 
   // All mutable state lives in refs — NO React state updates for drag/dock
-  const posRef = useRef({ ...initialPos });
+  const posRef = useRef<{ x: number; y: number }>({ ...initialPos });
   const dockRef = useRef<DockSide>(initialDock);
   const dragRef = useRef<{
     ox: number; oy: number; px: number; py: number; moved: boolean;
@@ -116,7 +127,10 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
   };
 
   // ---- Setup: apply initial state + attach drag listeners ----
-  useEffect(() => {
+  // useLayoutEffect: set position before paint. Do NOT put left/top or dock
+  // classes on JSX — any re-render (e.g. zen mode) would reset DOM to stale
+  // initialPos/initialDock and wipe out drag + reclamp state.
+  useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
 
@@ -234,26 +248,70 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
     };
     el.addEventListener("click", onClickCapture, { capture: true });
 
-    // Resize handler
-    const onResize = () => {
+    // Keep the toolbar inside the visible viewport. Saved positions from a
+    // larger display (e.g. screen share / second monitor) must be reclamped on
+    // load — window "resize" often does not fire when simply reopening a tab.
+    const reclampToViewport = () => {
       const rect = el.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) {
+        return;
+      }
       const m = 8;
       const maxX = Math.max(m, window.innerWidth - rect.width - m);
       const maxY = Math.max(m, window.innerHeight - rect.height - m);
       const ds = dockRef.current;
       let x = clamp(posRef.current.x, m, maxX);
-      if (ds === "left") x = m;
-      if (ds === "right") x = maxX;
+      if (ds === "left") {
+        x = m;
+      }
+      if (ds === "right") {
+        x = maxX;
+      }
       const y = clamp(posRef.current.y, m, maxY);
-      posRef.current = { x, y };
-      applyPosition(el, x, y);
+      const prev = posRef.current;
+      if (prev.x !== x || prev.y !== y) {
+        posRef.current = { x, y };
+        applyPosition(el, x, y);
+        persist({ ...posRef.current, dockSide: dockRef.current });
+      }
     };
+
+    const onResize = () => {
+      reclampToViewport();
+    };
+
     window.addEventListener("resize", onResize);
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener("resize", onResize);
+      vv.addEventListener("scroll", onResize);
+    }
+
+    const onPageShow = () => {
+      reclampToViewport();
+    };
+    window.addEventListener("pageshow", onPageShow);
+
+    // After layout + dock snap (which uses nested rAF), ensure we're on-screen.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        reclampToViewport();
+      });
+    });
+    const postDockClampId = window.setTimeout(() => {
+      reclampToViewport();
+    }, 400);
 
     return () => {
+      window.clearTimeout(postDockClampId);
       el.removeEventListener("mousedown", onMouseDown, { capture: true });
       el.removeEventListener("click", onClickCapture, { capture: true });
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("pageshow", onPageShow);
+      if (vv) {
+        vv.removeEventListener("resize", onResize);
+        vv.removeEventListener("scroll", onResize);
+      }
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
     };
@@ -264,10 +322,7 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
       ref={rootRef}
       className={clsx("floating-desktop-toolbar", {
         "floating-desktop-toolbar--zen": zenModeEnabled,
-        "floating-desktop-toolbar--docked-left": initialDock === "left",
-        "floating-desktop-toolbar--docked-right": initialDock === "right",
       })}
-      style={{ left: initialPos.x, top: initialPos.y }}
     >
       <div
         className="floating-desktop-toolbar__inner"

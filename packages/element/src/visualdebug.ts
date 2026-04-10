@@ -25,6 +25,8 @@ declare global {
     visualDebug?: {
       data: DebugElement[][];
       currentFrame?: number;
+      /** When true, debug canvas draws arrow binding curves (red/green) at attach points. Default off. */
+      debugArrowBindings?: boolean;
     };
   }
 }

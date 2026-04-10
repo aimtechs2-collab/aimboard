@@ -12,6 +12,8 @@ import helmet from "helmet";
 import OpenAI from "openai";
 import pg from "pg";
 
+import { searchImages } from "./lib/searchImages.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -19,6 +21,10 @@ dotenv.config({ path: path.join(repoRoot, ".env.development.local") });
 dotenv.config({ path: path.join(repoRoot, ".env.development") });
 dotenv.config({ path: path.join(repoRoot, ".env.local") });
 dotenv.config({ path: path.join(repoRoot, ".env") });
+// Allow secrets beside server.mjs (common for UNSPLASH_ACCESS_KEY, etc.)
+dotenv.config({ path: path.join(__dirname, ".env.development.local") });
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 const isProduction = process.env.NODE_ENV === "production";
 const trustProxy = process.env.TRUST_PROXY === "1";
@@ -29,6 +35,12 @@ const LISTEN_HOST =
   (isProduction ? "0.0.0.0" : "127.0.0.1");
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+
+if (!process.env.UNSPLASH_ACCESS_KEY?.trim()) {
+  console.warn(
+    "[aimtutor-ai] UNSPLASH_ACCESS_KEY is not set — sidebar image search returns no images. Add it to aifaboard/.env or ai-backend/.env (Unsplash Access Key / Client ID).",
+  );
+}
 
 const MERMAID_SYSTEM = `You are a diagram assistant for a whiteboard app. Your reply must be ONLY valid Mermaid diagram source code — no markdown fences, no explanations, no backticks.
 Choose an appropriate diagram type (flowchart, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie, etc.).
@@ -311,6 +323,10 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_board_ai_chat_messages_session_pos
     ON board_ai_chat_messages(session_id, position);
   `);
+  await pool.query(`
+    ALTER TABLE board_ai_chat_messages
+    ADD COLUMN IF NOT EXISTS images_json JSONB
+  `);
 }
 
 const DEFAULT_SCENE_SOURCE = "https://aimtutor.ai";
@@ -402,6 +418,43 @@ async function assertBoardAiSessionOwned(sessionId, boardId, localUserId) {
   return rows[0] ?? null;
 }
 
+/** Validate assistant image attachments from the client (HTTPS Unsplash only). */
+function sanitizeChatImagesArray(raw) {
+  if (raw == null) {
+    return undefined;
+  }
+  if (!Array.isArray(raw) || raw.length > 5) {
+    return undefined;
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const url = String(item.url ?? "").trim();
+    const alt = String(item.alt ?? "Image").replace(/\s+/g, " ").trim().slice(0, 300);
+    if (!url.startsWith("https://")) {
+      continue;
+    }
+    let hostOk = false;
+    try {
+      const u = new URL(url);
+      hostOk =
+        u.hostname === "images.unsplash.com" ||
+        u.hostname.endsWith(".unsplash.com");
+    } catch {
+      continue;
+    }
+    if (!hostOk || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    out.push({ url, alt: alt || "Image" });
+  }
+  return out.length ? out : undefined;
+}
+
 function parseSidebarChatMessagesArray(raw) {
   if (!Array.isArray(raw)) {
     return null;
@@ -423,10 +476,17 @@ function parseSidebarChatMessagesArray(raw) {
     if (!role) {
       return null;
     }
-    out.push({
+    const row = {
       role,
       content: String(m.content ?? "").slice(0, 12000),
-    });
+    };
+    if (role === "assistant") {
+      const imgs = sanitizeChatImagesArray(m.images);
+      if (imgs?.length) {
+        row.images = imgs;
+      }
+    }
+    out.push(row);
   }
   return out;
 }
@@ -1323,7 +1383,7 @@ app.get(
     }
     const msgRows = await pool.query(
       `
-      SELECT role, content FROM board_ai_chat_messages
+      SELECT role, content, images_json FROM board_ai_chat_messages
       WHERE session_id = $1
       ORDER BY position ASC
       `,
@@ -1338,10 +1398,24 @@ app.get(
         updatedAt: session.updated_at,
       },
       contextMessages,
-      messages: msgRows.rows.map((r) => ({
-        role: r.role,
-        content: r.content,
-      })),
+      messages: msgRows.rows.map((r) => {
+        const msg = { role: r.role, content: r.content };
+        if (r.role === "assistant" && r.images_json != null) {
+          try {
+            const raw =
+              typeof r.images_json === "string"
+                ? JSON.parse(r.images_json)
+                : r.images_json;
+            const imgs = sanitizeChatImagesArray(raw);
+            if (imgs?.length) {
+              msg.images = imgs;
+            }
+          } catch {
+            /* ignore corrupt json */
+          }
+        }
+        return msg;
+      }),
     });
   }),
 );
@@ -1433,12 +1507,16 @@ app.put(
       );
       for (let i = 0; i < messages.length; i++) {
         const m = messages[i];
+        const imagesPayload =
+          m.role === "assistant" && m.images?.length
+            ? JSON.stringify(m.images)
+            : null;
         await client.query(
           `
-          INSERT INTO board_ai_chat_messages (session_id, position, role, content)
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO board_ai_chat_messages (session_id, position, role, content, images_json)
+          VALUES ($1, $2, $3, $4, $5::jsonb)
           `,
-          [sessionId, i, m.role, m.content],
+          [sessionId, i, m.role, m.content, imagesPayload],
         );
       }
       let ctxJson;
@@ -1617,7 +1695,170 @@ Examples: how to use the app, one specific homework problem, "what does this sym
 Then answer **directly and concisely** without the full roadmap.
 
 ## Style
-Pedagogically sound, neutral tone. Do not invent official syllabi or exam boards unless named; state level assumptions once.`;
+Pedagogically sound, neutral tone. Do not invent official syllabi or exam boards unless named; state level assumptions once.
+
+## Visual aids (search_images tool)
+You are an AI tutor with access to the \`search_images\` function.
+
+When explaining a concept that benefits from **visual** understanding (diagrams, physical objects, places, organisms, lab apparatus, geometric or scientific setups), you **MUST** call \`search_images\` **once** with a **specific** English query.
+
+Guidelines:
+- Prefer queries like \`convex lens ray diagram physics\` or \`human heart anatomy diagram labeled\` over single generic words.
+- Do **not** call the tool for purely abstract topics (philosophy, grammar definitions, software architecture without a concrete visual).
+- **At most one** \`search_images\` call per user message.
+- After tool results, write a clear Markdown explanation. **Reference thumbnails appear automatically in the sidebar** — do **not** include Markdown images (\`![alt](url)\`), numbered lists of image links, raw \`https://images.unsplash.com/...\` URLs, or JSON from the tool. You may briefly name what the references depict (e.g. "See the ray diagrams in the gallery below") without pasting links.
+
+If the user message is primarily a **subject roadmap / curriculum planning** request, follow the roadmap rules above and **skip** \`search_images\` unless they clearly need reference pictures.
+
+If the user asks for **images**, **pictures**, **diagrams**, or **visuals** (even in a short follow-up like "images?" or "any pictures?"), you **must** call \`search_images\` with a query derived from the **topic in the conversation** (e.g. prior user message), not just the word "images".`;
+
+const SEARCH_IMAGES_OPENAI_TOOL = {
+  type: "function",
+  function: {
+    name: "search_images",
+    description:
+      "Find 3–5 Unsplash reference images for a visual teaching concept. Use a precise, descriptive query.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Specific English search query, e.g. convex lens ray diagram physics",
+        },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+function emitSidebarTextChunks(sendSse, text) {
+  const s = text ?? "";
+  const chunkSize = 56;
+  for (let i = 0; i < s.length; i += chunkSize) {
+    sendSse({ type: "content", delta: s.slice(i, i + chunkSize) });
+  }
+}
+
+/** Short user follow-ups like "images?" must still trigger Unsplash (tool_choice auto often skips them). */
+function shouldForceSidebarImageSearch(lastUserText) {
+  const s = String(lastUserText ?? "");
+  if (s.length > 220) {
+    return false;
+  }
+  const lower = s.toLowerCase();
+  return /\b(image|images|img|picture|pictures|photo|photos|diagram|diagrams|illustration|illustrations|visual|unsplash)\b/.test(
+    lower,
+  );
+}
+
+/** When the last user line is only a visual request, search using the previous user turn. */
+function fallbackImageSearchQuery(trimmed) {
+  const users = trimmed.filter((m) => m.role === "user");
+  const last = String(users[users.length - 1]?.content ?? "").trim();
+  const prev = users.length >= 2 ? String(users[users.length - 2]?.content ?? "").trim() : "";
+  const shortVisualOnly =
+    last.length < 56 &&
+    /\b(image|images|diagram|picture|pictures|photo|photos|visual)\b/i.test(last);
+  if (shortVisualOnly && prev.length > 2) {
+    return prev.slice(0, 200);
+  }
+  return (last || "teaching reference").slice(0, 200);
+}
+
+/**
+ * First OpenAI round (tools) + optional Unsplash fetch.
+ * @returns {Promise<{ mode: "direct"; text: string; images: any[]; usage: object|null } | { mode: "tools"; messages: any[]; images: any[]; usage: object|null }>}
+ */
+async function prepareSidebarChatTurn(openai, trimmed) {
+  const openaiMessages = [
+    { role: "system", content: SIDEBAR_CHAT_SYSTEM },
+    ...trimmed.map((m) => ({ role: m.role, content: m.content })),
+  ];
+
+  const lastUserLine =
+    [...trimmed].reverse().find((m) => m.role === "user")?.content ?? "";
+  const forceImageTool = shouldForceSidebarImageSearch(lastUserLine);
+
+  const first = await openai.chat.completions.create({
+    model: MODEL,
+    messages: openaiMessages,
+    tools: [SEARCH_IMAGES_OPENAI_TOOL],
+    tool_choice: forceImageTool
+      ? { type: "function", function: { name: "search_images" } }
+      : "auto",
+    max_tokens: 2048,
+    temperature: 0.7,
+  });
+
+  const msg = first.choices[0]?.message;
+  const usage = first.usage ?? null;
+
+  if (!msg?.tool_calls?.length) {
+    return {
+      mode: "direct",
+      text: msg?.content?.trim() ?? "",
+      images: [],
+      usage,
+    };
+  }
+
+  const msgsForRound2 = [
+    ...openaiMessages,
+    {
+      role: "assistant",
+      content: msg.content,
+      tool_calls: msg.tool_calls,
+    },
+  ];
+
+  const firstSearchId = msg.tool_calls.find(
+    (c) => c.function?.name === "search_images",
+  )?.id;
+
+  let clientImages = [];
+
+  for (const call of msg.tool_calls) {
+    const fnName = call.function?.name;
+    if (fnName === "search_images") {
+      const isFirst = call.id === firstSearchId;
+      let query = "";
+      try {
+        const args = JSON.parse(call.function.arguments || "{}");
+        query = String(args.query || "").trim();
+      } catch {
+        query = "";
+      }
+      const fallbackQ = fallbackImageSearchQuery(trimmed);
+      const imgs = isFirst
+        ? await searchImages({
+            query: query || fallbackQ || "reference",
+          })
+        : [];
+      if (isFirst) {
+        clientImages = imgs;
+      }
+      msgsForRound2.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify(imgs),
+      });
+    } else {
+      msgsForRound2.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify({ error: "unsupported tool" }),
+      });
+    }
+  }
+
+  return {
+    mode: "tools",
+    messages: msgsForRound2,
+    images: clientImages,
+    usage,
+  };
+}
 
 app.post(
   "/v1/ai/sidebar-chat-streaming",
@@ -1671,23 +1912,60 @@ app.post(
     };
 
     try {
+      const prep = await prepareSidebarChatTurn(openai, trimmed);
+
+      let promptTokens = prep.usage?.prompt_tokens ?? null;
+      let completionTokens = prep.usage?.completion_tokens ?? null;
+
+      if (prep.mode === "direct") {
+        emitSidebarTextChunks(sendSse, prep.text);
+        await logUsage({
+          userId: localUserId,
+          endpoint: "/v1/ai/sidebar-chat-streaming",
+          model: MODEL,
+          promptTokens,
+          completionTokens,
+        });
+        res.locals.auditDetails = {
+          kind: "ai_sidebar_chat_stream",
+          model: MODEL,
+          messageCount: trimmed.length,
+          promptTokens,
+          completionTokens,
+        };
+        sendSse({ type: "done", finishReason: "stop" });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+
+      if (prep.images?.length) {
+        sendSse({ type: "images", images: prep.images });
+      }
+
       const stream = await openai.chat.completions.create({
         model: MODEL,
         stream: true,
-        messages: [{ role: "system", content: SIDEBAR_CHAT_SYSTEM }, ...trimmed],
+        messages: prep.messages,
         max_tokens: 2048,
         temperature: 0.7,
       });
-      let promptTokens = null;
-      let completionTokens = null;
+
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta?.content ?? "";
-        promptTokens = chunk?.usage?.prompt_tokens ?? promptTokens;
-        completionTokens = chunk?.usage?.completion_tokens ?? completionTokens;
+        if (chunk.usage) {
+          promptTokens =
+            (prep.usage?.prompt_tokens ?? 0) +
+            (chunk.usage.prompt_tokens ?? 0);
+          completionTokens =
+            (prep.usage?.completion_tokens ?? 0) +
+            (chunk.usage.completion_tokens ?? 0);
+        }
         if (delta) {
           sendSse({ type: "content", delta });
         }
       }
+
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/sidebar-chat-streaming",
@@ -1764,29 +2042,47 @@ app.post(
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     try {
-      const completion = await openai.chat.completions.create({
-        model: MODEL,
-        messages: [
-          { role: "system", content: SIDEBAR_CHAT_SYSTEM },
-          ...trimmed,
-        ],
-        max_tokens: 2048,
-        temperature: 0.7,
-      });
-      const reply = completion.choices[0]?.message?.content?.trim() ?? "";
+      const prep = await prepareSidebarChatTurn(openai, trimmed);
+      let reply = "";
+      let images = [];
+      let promptTokens = prep.usage?.prompt_tokens ?? null;
+      let completionTokens = prep.usage?.completion_tokens ?? null;
+
+      if (prep.mode === "direct") {
+        reply = prep.text;
+        images = [];
+      } else {
+        images = prep.images ?? [];
+        const completion = await openai.chat.completions.create({
+          model: MODEL,
+          messages: prep.messages,
+          max_tokens: 2048,
+          temperature: 0.7,
+        });
+        reply = completion.choices[0]?.message?.content?.trim() ?? "";
+        const u2 = completion.usage;
+        if (u2) {
+          promptTokens =
+            (prep.usage?.prompt_tokens ?? 0) + (u2.prompt_tokens ?? 0);
+          completionTokens =
+            (prep.usage?.completion_tokens ?? 0) +
+            (u2.completion_tokens ?? 0);
+        }
+      }
+
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/sidebar-chat",
         model: MODEL,
-        promptTokens: completion.usage?.prompt_tokens ?? null,
-        completionTokens: completion.usage?.completion_tokens ?? null,
+        promptTokens,
+        completionTokens,
       });
       res.locals.auditDetails = {
         kind: "ai_sidebar_chat",
         model: MODEL,
         messageCount: trimmed.length,
       };
-      res.json({ reply });
+      res.json({ text: reply, images, reply });
     } catch (err) {
       res.locals.auditError = err?.message || "sidebar chat failed";
       res.status(500).json({ message: publicErrorMessage(err) });

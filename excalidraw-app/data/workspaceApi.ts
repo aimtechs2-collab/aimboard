@@ -275,16 +275,22 @@ export async function renameWorkspace(
   return data.workspace;
 }
 
+export type SidebarChatImage = {
+  url: string;
+  alt: string;
+};
+
 export type SidebarChatMessage = {
   role: "user" | "assistant";
   content: string;
+  images?: SidebarChatImage[];
 };
 
 /** OpenAI-backed chat; key stays on ai-backend (OPENAI_API_KEY). Requires Clerk JWT. */
 export async function postSidebarChat(
   getToken: () => Promise<string | null>,
   messages: SidebarChatMessage[],
-): Promise<string> {
+): Promise<{ text: string; images: SidebarChatImage[] }> {
   const base = getWorkspaceApiBase();
   if (!base) {
     throw new Error("VITE_APP_AI_BACKEND is not configured");
@@ -294,8 +300,14 @@ export async function postSidebarChat(
     headers: await headersJson(getToken),
     body: JSON.stringify({ messages }),
   });
-  const data = await parseJson<{ reply: string }>(res);
-  return data.reply ?? "";
+  const data = await parseJson<{
+    text?: string;
+    reply?: string;
+    images?: SidebarChatImage[];
+  }>(res);
+  const text = data.text ?? data.reply ?? "";
+  const images = Array.isArray(data.images) ? data.images : [];
+  return { text, images };
 }
 
 export async function postSidebarChatStream(
@@ -303,9 +315,10 @@ export async function postSidebarChatStream(
   messages: SidebarChatMessage[],
   options?: {
     onChunk?: (chunk: string) => void;
+    onImages?: (images: SidebarChatImage[]) => void;
     signal?: AbortSignal;
   },
-): Promise<string> {
+): Promise<{ text: string; images: SidebarChatImage[] }> {
   const base = getWorkspaceApiBase();
   if (!base) {
     throw new Error("VITE_APP_AI_BACKEND is not configured");
@@ -344,6 +357,7 @@ export async function postSidebarChatStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let fullResponse = "";
+  let streamImages: SidebarChatImage[] = [];
   while (true) {
     const { done, value } = await reader.read();
     if (done) {
@@ -359,28 +373,42 @@ export async function postSidebarChatStream(
       }
       const data = trimmed.slice(6);
       if (data === "[DONE]") {
-        return fullResponse;
+        return { text: fullResponse, images: streamImages };
       }
       try {
         const parsed = JSON.parse(data) as
           | { type: "content"; delta?: string }
+          | { type: "images"; images?: SidebarChatImage[] }
           | { type: "error"; error?: { message?: string } }
           | { type: "done" };
         if (parsed.type === "content" && parsed.delta) {
           fullResponse += parsed.delta;
           options?.onChunk?.(parsed.delta);
         }
+        if (parsed.type === "images" && Array.isArray(parsed.images)) {
+          streamImages = parsed.images.filter(
+            (im) =>
+              im &&
+              typeof im.url === "string" &&
+              im.url.startsWith("https://") &&
+              typeof im.alt === "string",
+          ) as SidebarChatImage[];
+          options?.onImages?.(streamImages);
+        }
         if (parsed.type === "error") {
           throw new Error(parsed.error?.message || "Streaming request failed");
         }
       } catch (error) {
+        if (error instanceof SyntaxError) {
+          continue;
+        }
         if (error instanceof Error) {
           throw error;
         }
       }
     }
   }
-  return fullResponse;
+  return { text: fullResponse, images: streamImages };
 }
 
 export type BoardAiChatSessionSummary = {

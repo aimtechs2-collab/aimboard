@@ -356,8 +356,11 @@ const _debugRenderer = (
     appState.scrollY * appState.zoom.value,
   );
 
-  renderOrigin(context, appState.zoom.value);
-  renderBindings(context, elements, appState.zoom.value);
+  // Binding curves are noisy for normal use; opt in: `window.visualDebug.debugArrowBindings = true`
+  if (window.visualDebug?.debugArrowBindings) {
+    renderOrigin(context, appState.zoom.value);
+    renderBindings(context, elements, appState.zoom.value);
+  }
 
   if (
     window.visualDebug?.currentFrame &&

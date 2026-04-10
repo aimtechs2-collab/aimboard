@@ -51,6 +51,31 @@ const SIDEBAR_MIN_WIDTH = 280;
 const SIDEBAR_MAX_WIDTH = 560;
 const CHAT_HISTORY_MAX = 40;
 
+/** Remove Markdown images / Unsplash URLs; thumbnails are shown separately in the sidebar. */
+function stripEmbeddedReferenceImages(text: string): string {
+  let s = text.replace(/\r/g, "");
+  s = s.replace(/^\s*\d+\.\s*!\[[^\]]*\]\([^)\n]+\)\s*$/gm, "");
+  s = s.replace(/^\s*[-*]\s+!\[[^\]]*\]\([^)\n]+\)\s*$/gm, "");
+  s = s.replace(/!\[([^\]]*)\]\([^)\n]+\)/g, (_, alt) => {
+    const t = String(alt).replace(/\s+/g, " ").trim();
+    return t ? t : "";
+  });
+  s = s.replace(
+    /\[([^\]]+)\]\(\s*https?:\/\/[^)\n]*unsplash\.com[^)\n]*\)/gi,
+    (_, label) => String(label).trim(),
+  );
+  s = s.replace(/^\s*https?:\/\/[^\s]+\s*$/gm, (line) => {
+    const u = line.trim();
+    if (/\/\/([^/]*\.)?unsplash\.com\//i.test(u)) {
+      return "";
+    }
+    return line;
+  });
+  s = s.replace(/[ \t]+\n/g, "\n");
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trimEnd();
+}
+
 type SavedChatSession = {
   id: string;
   title: string;
@@ -351,7 +376,7 @@ const renderAssistantMessage = (
   content: string,
   actions: MathSnippetActions,
 ) => {
-  const lines = content.replace(/\r/g, "").split("\n");
+  const lines = stripEmbeddedReferenceImages(content).replace(/\r/g, "").split("\n");
   const nodes: React.ReactNode[] = [];
   let paragraph: string[] = [];
   let listType: "ul" | "ol" | null = null;
@@ -513,9 +538,10 @@ const renderAssistantMessage = (
   }
 
   if (nodes.length === 0) {
+    const fallback = stripEmbeddedReferenceImages(content);
     return (
       <p className="aim-ai-chat__md-paragraph">
-        {renderTextWithMath(content, "fallback", actions)}
+        {renderTextWithMath(fallback, "fallback", actions)}
       </p>
     );
   }
@@ -864,30 +890,49 @@ export const AiSidebarChatProvider: React.FC<{
     setMessages(sessionWithUser);
     setLoading(true);
     try {
-      const reply = await postSidebarChatStream(getTokenRef.current, trimmedForApi, {
-        onChunk: (chunk) => {
-          setMessages((prev) => {
-            const next = [...prev];
-            const lastIndex = next.length - 1;
-            if (lastIndex < 0 || next[lastIndex].role !== "assistant") {
-              next.push({ role: "assistant", content: chunk });
+      const { text: replyText, images: replyImages } =
+        await postSidebarChatStream(getTokenRef.current, trimmedForApi, {
+          onChunk: (chunk) => {
+            setMessages((prev) => {
+              const next = [...prev];
+              const lastIndex = next.length - 1;
+              if (lastIndex < 0 || next[lastIndex].role !== "assistant") {
+                next.push({ role: "assistant", content: chunk });
+                return next;
+              }
+              next[lastIndex] = {
+                ...next[lastIndex],
+                content: next[lastIndex].content + chunk,
+              };
               return next;
-            }
-            next[lastIndex] = {
-              ...next[lastIndex],
-              content: next[lastIndex].content + chunk,
-            };
-            return next;
-          });
-        },
-      });
+            });
+          },
+          onImages: (images) => {
+            setMessages((prev) => {
+              const next = [...prev];
+              const lastIndex = next.length - 1;
+              if (lastIndex < 0 || next[lastIndex].role !== "assistant") {
+                return next;
+              }
+              next[lastIndex] = {
+                ...next[lastIndex],
+                images: images.length ? [...images] : undefined,
+              };
+              return next;
+            });
+          },
+        });
       const persistId = activeSessionIdRef.current;
       const fallback = "I could not generate a response. Please try again.";
-      const assistantBody = reply.trim() ? reply : fallback;
+      const assistantBody = replyText.trim() ? replyText : fallback;
       const finalThread: SidebarChatMessage[] = [
         ...sessionPrior,
         { role: "user", content: text },
-        { role: "assistant", content: assistantBody },
+        {
+          role: "assistant",
+          content: assistantBody,
+          ...(replyImages.length ? { images: replyImages } : {}),
+        },
       ];
       setMessages(finalThread);
       if (boardId && persistId) {
@@ -1365,12 +1410,46 @@ export const AiSidebarChat: React.FC = () => {
                         onInsertMath,
                       })}
                     </div>
+                    {m.images && m.images.length > 0 && (
+                      <div
+                        className="aim-ai-chat__illustrations"
+                        aria-label="Reference images"
+                      >
+                        {m.images.slice(0, 5).map((im, idx) => (
+                          <button
+                            key={`${im.url}-${idx}`}
+                            type="button"
+                            className="aim-ai-chat__illustrations-item"
+                            title={im.alt}
+                            aria-label={
+                              im.alt
+                                ? `${im.alt} (opens in new tab)`
+                                : "Open reference image"
+                            }
+                            onClick={() =>
+                              window.open(im.url, "_blank", "noopener,noreferrer")
+                            }
+                          >
+                            <img
+                              src={im.url}
+                              alt={im.alt || "Reference image"}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {showCopyFullReply && (
                       <div className="aim-ai-chat__response-footer">
                         <button
                           type="button"
                           className="aim-ai-chat__response-copy"
-                          onClick={() => void onCopyAssistantReply(m.content)}
+                          onClick={() =>
+                            void onCopyAssistantReply(
+                              stripEmbeddedReferenceImages(m.content),
+                            )
+                          }
                         >
                           Copy
                         </button>

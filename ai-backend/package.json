@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "mcp:search-images": "node mcp/search-images-server.mjs"
   },
   "dependencies": {
     "@clerk/backend": "3.2.4",
     "@clerk/express": "2.0.8",
+    "@modelcontextprotocol/sdk": "1.12.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
