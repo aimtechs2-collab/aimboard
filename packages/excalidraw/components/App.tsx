@@ -614,6 +614,26 @@ const gesture: Gesture = {
   initialScale: null,
 };
 
+/** AimTutor: drag AI sidebar reference thumbnails onto the canvas (see AiSidebarChat). */
+const AIMBOARD_CHAT_IMAGE_DRAG_MIME = "application/x-aimboard-chat-image";
+
+function guessImageMimeFromImageUrl(url: string): string {
+  const path = url.split("?")[0].split("#")[0].toLowerCase();
+  if (path.endsWith(".png")) {
+    return MIME_TYPES.png;
+  }
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+    return IMAGE_MIME_TYPES.jpg;
+  }
+  if (path.endsWith(".webp")) {
+    return IMAGE_MIME_TYPES.webp;
+  }
+  if (path.endsWith(".gif")) {
+    return IMAGE_MIME_TYPES.gif;
+  }
+  return MIME_TYPES.png;
+}
+
 class App extends React.Component<AppProps, AppState> {
   canvas: AppClassProperties["canvas"];
   interactiveCanvas: AppClassProperties["interactiveCanvas"] = null;
@@ -2119,6 +2139,7 @@ class App extends React.Component<AppProps, AppState> {
             "var(--aim-right-sidebar-width, 302px)",
         }}
         ref={this.excalidrawContainerRef}
+        onDragOver={this.handleAppDragOver}
         onDrop={this.handleAppOnDrop}
         tabIndex={0}
         onKeyDown={
@@ -11821,11 +11842,78 @@ class App extends React.Component<AppProps, AppState> {
     });
   };
 
+  private handleAppDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    const dt = event.dataTransfer;
+    if (!dt) {
+      return;
+    }
+    const types = Array.from(dt.types || []);
+    if (
+      types.includes(AIMBOARD_CHAT_IMAGE_DRAG_MIME) ||
+      types.includes("Files")
+    ) {
+      event.preventDefault();
+      dt.dropEffect = "copy";
+    }
+  };
+
   private handleAppOnDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     const { x: sceneX, y: sceneY } = viewportCoordsToSceneCoords(
       event,
       this.state,
     );
+
+    const aimRaw =
+      typeof event.dataTransfer?.getData === "function"
+        ? event.dataTransfer.getData(AIMBOARD_CHAT_IMAGE_DRAG_MIME)
+        : "";
+    if (aimRaw) {
+      event.preventDefault();
+      try {
+        const parsed = JSON.parse(aimRaw) as { url?: string };
+        const url = typeof parsed.url === "string" ? parsed.url.trim() : "";
+        if (
+          url.startsWith("https://") &&
+          this.isToolSupported("image")
+        ) {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error("fetch failed");
+          }
+          const blob = await res.blob();
+          let mime = blob.type;
+          if (!mime || mime === "application/octet-stream") {
+            mime = guessImageMimeFromImageUrl(url);
+          }
+          const ext =
+            mime === MIME_TYPES.png
+              ? "png"
+              : mime === IMAGE_MIME_TYPES.jpg
+                ? "jpg"
+                : mime === IMAGE_MIME_TYPES.webp
+                  ? "webp"
+                  : mime === IMAGE_MIME_TYPES.gif
+                    ? "gif"
+                    : "png";
+          const file = new File([blob], `aim-reference-${Date.now()}.${ext}`, {
+            type: mime,
+          });
+          if (isSupportedImageFile(file)) {
+            await this.insertImages([file], sceneX, sceneY);
+            return;
+          }
+        }
+        this.setState({
+          errorMessage: t("errors.imageInsertError"),
+        });
+      } catch {
+        this.setState({
+          errorMessage: t("errors.imageInsertError"),
+        });
+      }
+      return;
+    }
+
     const dataTransferList = await parseDataTransferEvent(event);
 
     // must be retrieved first, in the same frame

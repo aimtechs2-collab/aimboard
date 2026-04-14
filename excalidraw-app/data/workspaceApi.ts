@@ -358,6 +358,42 @@ export async function postSidebarChatStream(
   let buffer = "";
   let fullResponse = "";
   let streamImages: SidebarChatImage[] = [];
+
+  /** RAF-batch deltas so React can paint between frames (avoids one giant batched update). */
+  let rafPending = "";
+  let rafId: number | null = null;
+  const flushRafChunk = () => {
+    rafId = null;
+    if (!options?.onChunk || !rafPending) {
+      rafPending = "";
+      return;
+    }
+    const chunk = rafPending;
+    rafPending = "";
+    options.onChunk(chunk);
+  };
+  const scheduleStreamChunk = (delta: string) => {
+    fullResponse += delta;
+    if (typeof requestAnimationFrame !== "function") {
+      options?.onChunk?.(delta);
+      return;
+    }
+    rafPending += delta;
+    if (rafId == null) {
+      rafId = requestAnimationFrame(flushRafChunk);
+    }
+  };
+  const flushAllPendingChunks = () => {
+    if (rafId != null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    if (rafPending && options?.onChunk) {
+      options.onChunk(rafPending);
+      rafPending = "";
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) {
@@ -373,6 +409,7 @@ export async function postSidebarChatStream(
       }
       const data = trimmed.slice(6);
       if (data === "[DONE]") {
+        flushAllPendingChunks();
         return { text: fullResponse, images: streamImages };
       }
       try {
@@ -382,17 +419,23 @@ export async function postSidebarChatStream(
           | { type: "error"; error?: { message?: string } }
           | { type: "done" };
         if (parsed.type === "content" && parsed.delta) {
-          fullResponse += parsed.delta;
-          options?.onChunk?.(parsed.delta);
+          scheduleStreamChunk(parsed.delta);
         }
         if (parsed.type === "images" && Array.isArray(parsed.images)) {
-          streamImages = parsed.images.filter(
-            (im) =>
-              im &&
-              typeof im.url === "string" &&
-              im.url.startsWith("https://") &&
-              typeof im.alt === "string",
-          ) as SidebarChatImage[];
+          streamImages = parsed.images
+            .filter(
+              (im) =>
+                im &&
+                typeof im.url === "string" &&
+                im.url.startsWith("https://"),
+            )
+            .map((im) => ({
+              url: im.url,
+              alt:
+                typeof im.alt === "string" && im.alt.trim()
+                  ? im.alt
+                  : "Reference image",
+            })) as SidebarChatImage[];
           options?.onImages?.(streamImages);
         }
         if (parsed.type === "error") {
@@ -408,6 +451,7 @@ export async function postSidebarChatStream(
       }
     }
   }
+  flushAllPendingChunks();
   return { text: fullResponse, images: streamImages };
 }
 

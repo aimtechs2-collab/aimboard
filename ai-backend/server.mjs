@@ -12,7 +12,12 @@ import helmet from "helmet";
 import OpenAI from "openai";
 import pg from "pg";
 
-import { searchImages } from "./lib/searchImages.mjs";
+import {
+  fetchImagesWithMetaFromQueries,
+  isAllowedChatImageUrl,
+} from "./lib/googleImageSearch.mjs";
+import { expandImageSearchQueriesOpenAI } from "./lib/imageQueryOpenAI.mjs";
+import { httpLogger, logger } from "./lib/logger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -21,7 +26,7 @@ dotenv.config({ path: path.join(repoRoot, ".env.development.local") });
 dotenv.config({ path: path.join(repoRoot, ".env.development") });
 dotenv.config({ path: path.join(repoRoot, ".env.local") });
 dotenv.config({ path: path.join(repoRoot, ".env") });
-// Allow secrets beside server.mjs (common for UNSPLASH_ACCESS_KEY, etc.)
+// Allow secrets beside server.mjs (common for API keys, etc.)
 dotenv.config({ path: path.join(__dirname, ".env.development.local") });
 dotenv.config({ path: path.join(__dirname, ".env.local") });
 dotenv.config({ path: path.join(__dirname, ".env") });
@@ -42,9 +47,13 @@ const LISTEN_HOST =
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
 
-if (!process.env.UNSPLASH_ACCESS_KEY?.trim()) {
-  console.warn(
-    "[aimtutor-ai] UNSPLASH_ACCESS_KEY is not set — sidebar image search returns no images. Add it to aifaboard/.env or ai-backend/.env (Unsplash Access Key / Client ID).",
+const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
+const hasGoogleImageKeys =
+  Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
+  Boolean(process.env.GOOGLE_CX?.trim());
+if (!hasSerpImageKey && !hasGoogleImageKeys) {
+  logger.warn(
+    "No image search credentials: set SERPAPI_API_KEY (SerpAPI Google Images) or GOOGLE_API_KEY + GOOGLE_CX (Custom Search).",
   );
 }
 
@@ -136,6 +145,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "32mb" }));
+app.use(httpLogger);
 
 const v1Limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -440,12 +450,12 @@ async function assertBoardAiSessionOwned(sessionId, boardId, localUserId) {
   return rows[0] ?? null;
 }
 
-/** Validate assistant image attachments from the client (HTTPS Unsplash only). */
+/** Validate assistant image attachments (HTTPS only; block localhost/private hosts). */
 function sanitizeChatImagesArray(raw) {
   if (raw == null) {
     return undefined;
   }
-  if (!Array.isArray(raw) || raw.length > 5) {
+  if (!Array.isArray(raw) || raw.length > 4) {
     return undefined;
   }
   const out = [];
@@ -456,19 +466,7 @@ function sanitizeChatImagesArray(raw) {
     }
     const url = String(item.url ?? "").trim();
     const alt = String(item.alt ?? "Image").replace(/\s+/g, " ").trim().slice(0, 300);
-    if (!url.startsWith("https://")) {
-      continue;
-    }
-    let hostOk = false;
-    try {
-      const u = new URL(url);
-      hostOk =
-        u.hostname === "images.unsplash.com" ||
-        u.hostname.endsWith(".unsplash.com");
-    } catch {
-      continue;
-    }
-    if (!hostOk || seen.has(url)) {
+    if (!isAllowedChatImageUrl(url) || seen.has(url)) {
       continue;
     }
     seen.add(url);
@@ -785,13 +783,23 @@ async function logUsage({
   promptTokens = null,
   completionTokens = null,
 }) {
-  await pool.query(
-    `
+  if (!process.env.NEON_DATABASE_URL) {
+    return;
+  }
+  try {
+    await pool.query(
+      `
       INSERT INTO ai_usage_events (user_id, endpoint, model, prompt_tokens, completion_tokens)
       VALUES ($1, $2, $3, $4, $5);
     `,
-    [userId, endpoint, model, promptTokens, completionTokens],
-  );
+      [userId, endpoint, model, promptTokens, completionTokens],
+    );
+  } catch (err) {
+    logger.warn(
+      { err, endpoint, module: "logUsage" },
+      "Failed to record AI usage (non-fatal)",
+    );
+  }
 }
 
 app.get(
@@ -1719,167 +1727,86 @@ Then answer **directly and concisely** without the full roadmap.
 ## Style
 Pedagogically sound, neutral tone. Do not invent official syllabi or exam boards unless named; state level assumptions once.
 
-## Visual aids (search_images tool)
-You are an AI tutor with access to the \`search_images\` function.
+## Reference images (automatic)
+For **every** user turn, the app uses an internal **OpenAI step** to derive several image search queries from the conversation, runs **web image search**, and shows up to **four** thumbnails in the sidebar (they may appear **while** your reply streams, not only after).
 
-When explaining a concept that benefits from **visual** understanding (diagrams, physical objects, places, organisms, lab apparatus, geometric or scientific setups), you **MUST** call \`search_images\` **once** with a **specific** English query.
+In your reply:
+- Assume relevant reference images **will appear** beside the message; tie your explanation to **visual teaching** when it helps (diagrams, setups, examples).
+- Do **not** include Markdown images (\`![alt](url)\`), raw image URLs, numbered link lists, or JSON. You may briefly mention what the gallery illustrates (e.g. “see the vector diagrams in the references”).`;
 
-Guidelines:
-- Prefer queries like \`convex lens ray diagram physics\` or \`human heart anatomy diagram labeled\` over single generic words.
-- Do **not** call the tool for purely abstract topics (philosophy, grammar definitions, software architecture without a concrete visual).
-- **At most one** \`search_images\` call per user message.
-- After tool results, write a clear Markdown explanation. **Reference thumbnails appear automatically in the sidebar** — do **not** include Markdown images (\`![alt](url)\`), numbered lists of image links, raw \`https://images.unsplash.com/...\` URLs, or JSON from the tool. You may briefly name what the references depict (e.g. "See the ray diagrams in the gallery below") without pasting links.
-
-If the user message is primarily a **subject roadmap / curriculum planning** request, follow the roadmap rules above and **skip** \`search_images\` unless they clearly need reference pictures.
-
-If the user asks for **images**, **pictures**, **diagrams**, or **visuals** (even in a short follow-up like "images?" or "any pictures?"), you **must** call \`search_images\` with a query derived from the **topic in the conversation** (e.g. prior user message), not just the word "images".`;
-
-const SEARCH_IMAGES_OPENAI_TOOL = {
-  type: "function",
-  function: {
-    name: "search_images",
-    description:
-      "Find 3–5 Unsplash reference images for a visual teaching concept. Use a precise, descriptive query.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "Specific English search query, e.g. convex lens ray diagram physics",
-        },
-      },
-      required: ["query"],
-    },
-  },
-};
-
-function emitSidebarTextChunks(sendSse, text) {
-  const s = text ?? "";
-  const chunkSize = 56;
-  for (let i = 0; i < s.length; i += chunkSize) {
-    sendSse({ type: "content", delta: s.slice(i, i + chunkSize) });
-  }
+/** OpenAI messages for sidebar chat (system + trimmed history). */
+function buildSidebarOpenAIMessages(trimmed) {
+  return [
+    { role: "system", content: SIDEBAR_CHAT_SYSTEM },
+    ...trimmed.map((m) => ({ role: m.role, content: m.content })),
+  ];
 }
 
-/** Short user follow-ups like "images?" must still trigger Unsplash (tool_choice auto often skips them). */
-function shouldForceSidebarImageSearch(lastUserText) {
-  const s = String(lastUserText ?? "");
-  if (s.length > 220) {
-    return false;
-  }
-  const lower = s.toLowerCase();
-  return /\b(image|images|img|picture|pictures|photo|photos|diagram|diagrams|illustration|illustrations|visual|unsplash)\b/.test(
-    lower,
-  );
+function hasSidebarImageSearchCredentials() {
+  const hasSerp = Boolean(process.env.SERPAPI_API_KEY?.trim());
+  const hasGoogle =
+    Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
+    Boolean(process.env.GOOGLE_CX?.trim());
+  return hasSerp || hasGoogle;
 }
 
-/** When the last user line is only a visual request, search using the previous user turn. */
+/**
+ * Derive a single search string from the last user message (and sometimes the prior turn).
+ * Used on every assistant response so thumbnails match the conversation topic.
+ */
 function fallbackImageSearchQuery(trimmed) {
   const users = trimmed.filter((m) => m.role === "user");
   const last = String(users[users.length - 1]?.content ?? "").trim();
-  const prev = users.length >= 2 ? String(users[users.length - 2]?.content ?? "").trim() : "";
+  const prev =
+    users.length >= 2
+      ? String(users[users.length - 2]?.content ?? "").trim()
+      : "";
   const shortVisualOnly =
     last.length < 56 &&
-    /\b(image|images|diagram|picture|pictures|photo|photos|visual)\b/i.test(last);
+    /\b(image|images|diagram|picture|pictures|photo|photos|visual)\b/i.test(
+      last,
+    );
   if (shortVisualOnly && prev.length > 2) {
+    return prev.slice(0, 200);
+  }
+  // Short follow-ups ("ok", "more", "yes"): keep images aligned with the prior topic.
+  if (last.length < 20 && prev.length > 10) {
     return prev.slice(0, 200);
   }
   return (last || "teaching reference").slice(0, 200);
 }
 
 /**
- * First OpenAI round (tools) + optional Unsplash fetch.
- * @returns {Promise<{ mode: "direct"; text: string; images: any[]; usage: object|null } | { mode: "tools"; messages: any[]; images: any[]; usage: object|null }>}
+ * OpenAI query expansion + Serp/Google image fetch.
+ * Streaming route runs this in parallel with the assistant text stream; SSE `images` is sent when this resolves.
+ * @returns {Promise<{ items: any[]; expansionUsage: { prompt_tokens: number; completion_tokens: number } | null }>}
  */
-async function prepareSidebarChatTurn(openai, trimmed) {
-  const openaiMessages = [
-    { role: "system", content: SIDEBAR_CHAT_SYSTEM },
-    ...trimmed.map((m) => ({ role: m.role, content: m.content })),
-  ];
-
-  const lastUserLine =
-    [...trimmed].reverse().find((m) => m.role === "user")?.content ?? "";
-  const forceImageTool = shouldForceSidebarImageSearch(lastUserLine);
-
-  const first = await openai.chat.completions.create({
-    model: MODEL,
-    messages: openaiMessages,
-    tools: [SEARCH_IMAGES_OPENAI_TOOL],
-    tool_choice: forceImageTool
-      ? { type: "function", function: { name: "search_images" } }
-      : "auto",
-    max_tokens: 2048,
-    temperature: 0.7,
-  });
-
-  const msg = first.choices[0]?.message;
-  const usage = first.usage ?? null;
-
-  if (!msg?.tool_calls?.length) {
+async function runSidebarImagePipeline(openai, trimmed) {
+  if (!hasSidebarImageSearchCredentials()) {
+    return { items: [], expansionUsage: null };
+  }
+  const topicSeed = fallbackImageSearchQuery(trimmed);
+  const imageQueryModel =
+    process.env.OPENAI_IMAGE_QUERY_MODEL?.trim() || MODEL;
+  const { queries, usage: expansionUsage } =
+    await expandImageSearchQueriesOpenAI(
+      openai,
+      { trimmed, topicSeed },
+      imageQueryModel,
+    );
+  try {
+    const { items } = await fetchImagesWithMetaFromQueries(queries, 4);
     return {
-      mode: "direct",
-      text: msg?.content?.trim() ?? "",
-      images: [],
-      usage,
+      items: Array.isArray(items) ? items : [],
+      expansionUsage,
     };
+  } catch (err) {
+    logger.debug(
+      { err, module: "sidebarChat" },
+      "sidebar image fetch failed (non-fatal)",
+    );
+    return { items: [], expansionUsage };
   }
-
-  const msgsForRound2 = [
-    ...openaiMessages,
-    {
-      role: "assistant",
-      content: msg.content,
-      tool_calls: msg.tool_calls,
-    },
-  ];
-
-  const firstSearchId = msg.tool_calls.find(
-    (c) => c.function?.name === "search_images",
-  )?.id;
-
-  let clientImages = [];
-
-  for (const call of msg.tool_calls) {
-    const fnName = call.function?.name;
-    if (fnName === "search_images") {
-      const isFirst = call.id === firstSearchId;
-      let query = "";
-      try {
-        const args = JSON.parse(call.function.arguments || "{}");
-        query = String(args.query || "").trim();
-      } catch {
-        query = "";
-      }
-      const fallbackQ = fallbackImageSearchQuery(trimmed);
-      const imgs = isFirst
-        ? await searchImages({
-            query: query || fallbackQ || "reference",
-          })
-        : [];
-      if (isFirst) {
-        clientImages = imgs;
-      }
-      msgsForRound2.push({
-        role: "tool",
-        tool_call_id: call.id,
-        content: JSON.stringify(imgs),
-      });
-    } else {
-      msgsForRound2.push({
-        role: "tool",
-        tool_call_id: call.id,
-        content: JSON.stringify({ error: "unsupported tool" }),
-      });
-    }
-  }
-
-  return {
-    mode: "tools",
-    messages: msgsForRound2,
-    images: clientImages,
-    usage,
-  };
 }
 
 app.post(
@@ -1934,58 +1861,55 @@ app.post(
     };
 
     try {
-      const prep = await prepareSidebarChatTurn(openai, trimmed);
+      const openaiMessages = buildSidebarOpenAIMessages(trimmed);
+      let promptTokens = null;
+      let completionTokens = null;
 
-      let promptTokens = prep.usage?.prompt_tokens ?? null;
-      let completionTokens = prep.usage?.completion_tokens ?? null;
-
-      if (prep.mode === "direct") {
-        emitSidebarTextChunks(sendSse, prep.text);
-        await logUsage({
-          userId: localUserId,
-          endpoint: "/v1/ai/sidebar-chat-streaming",
-          model: MODEL,
-          promptTokens,
-          completionTokens,
+      /** Image expansion + fetch runs in parallel with assistant streaming; thumbnails SSE when ready. */
+      const imageJob = runSidebarImagePipeline(openai, trimmed)
+        .then(({ items, expansionUsage }) => {
+          if (items.length > 0 && !res.writableEnded) {
+            sendSse({ type: "images", images: items });
+          }
+          return { expansionUsage };
+        })
+        .catch((err) => {
+          logger.debug(
+            { err, module: "sidebarChat" },
+            "sidebar image job failed",
+          );
+          return { expansionUsage: null };
         });
-        res.locals.auditDetails = {
-          kind: "ai_sidebar_chat_stream",
-          model: MODEL,
-          messageCount: trimmed.length,
-          promptTokens,
-          completionTokens,
-        };
-        sendSse({ type: "done", finishReason: "stop" });
-        res.write("data: [DONE]\n\n");
-        res.end();
-        return;
-      }
-
-      if (prep.images?.length) {
-        sendSse({ type: "images", images: prep.images });
-      }
 
       const stream = await openai.chat.completions.create({
         model: MODEL,
         stream: true,
-        messages: prep.messages,
+        messages: openaiMessages,
         max_tokens: 2048,
         temperature: 0.7,
+        stream_options: { include_usage: true },
       });
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta?.content ?? "";
         if (chunk.usage) {
           promptTokens =
-            (prep.usage?.prompt_tokens ?? 0) +
-            (chunk.usage.prompt_tokens ?? 0);
+            (promptTokens ?? 0) + (chunk.usage.prompt_tokens ?? 0);
           completionTokens =
-            (prep.usage?.completion_tokens ?? 0) +
-            (chunk.usage.completion_tokens ?? 0);
+            (completionTokens ?? 0) + (chunk.usage.completion_tokens ?? 0);
         }
         if (delta) {
           sendSse({ type: "content", delta });
         }
+      }
+
+      const { expansionUsage: imageExpansionUsage } = await imageJob;
+      if (imageExpansionUsage) {
+        promptTokens =
+          (promptTokens ?? 0) + (imageExpansionUsage.prompt_tokens ?? 0);
+        completionTokens =
+          (completionTokens ?? 0) +
+          (imageExpansionUsage.completion_tokens ?? 0);
       }
 
       await logUsage({
@@ -2064,32 +1988,29 @@ app.post(
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     try {
-      const prep = await prepareSidebarChatTurn(openai, trimmed);
-      let reply = "";
-      let images = [];
-      let promptTokens = prep.usage?.prompt_tokens ?? null;
-      let completionTokens = prep.usage?.completion_tokens ?? null;
-
-      if (prep.mode === "direct") {
-        reply = prep.text;
-        images = [];
-      } else {
-        images = prep.images ?? [];
-        const completion = await openai.chat.completions.create({
+      const openaiMessages = buildSidebarOpenAIMessages(trimmed);
+      const [pipelineResult, completion] = await Promise.all([
+        runSidebarImagePipeline(openai, trimmed),
+        openai.chat.completions.create({
           model: MODEL,
-          messages: prep.messages,
+          messages: openaiMessages,
           max_tokens: 2048,
           temperature: 0.7,
-        });
-        reply = completion.choices[0]?.message?.content?.trim() ?? "";
-        const u2 = completion.usage;
-        if (u2) {
-          promptTokens =
-            (prep.usage?.prompt_tokens ?? 0) + (u2.prompt_tokens ?? 0);
-          completionTokens =
-            (prep.usage?.completion_tokens ?? 0) +
-            (u2.completion_tokens ?? 0);
-        }
+        }),
+      ]);
+      const images = pipelineResult.items;
+      let promptTokens = pipelineResult.expansionUsage
+        ? pipelineResult.expansionUsage.prompt_tokens
+        : null;
+      let completionTokens = pipelineResult.expansionUsage
+        ? pipelineResult.expansionUsage.completion_tokens
+        : null;
+
+      const reply = completion.choices[0]?.message?.content?.trim() ?? "";
+      const u2 = completion.usage;
+      if (u2) {
+        promptTokens = (promptTokens ?? 0) + (u2.prompt_tokens ?? 0);
+        completionTokens = (completionTokens ?? 0) + (u2.completion_tokens ?? 0);
       }
 
       await logUsage({
@@ -2223,8 +2144,8 @@ app.use((_req, res) => {
   res.status(404).json({ message: "Not found" });
 });
 
-app.use((err, _req, res, _next) => {
-  console.error("[aimtutor-ai] unhandled error", err);
+app.use((err, req, res, _next) => {
+  (req.log || logger).error({ err }, "[aimtutor-ai] unhandled error");
   if (res.headersSent) {
     return;
   }
@@ -2237,31 +2158,44 @@ app.use((err, _req, res, _next) => {
 ensureSchema()
   .then(() => {
     const server = app.listen(PORT, LISTEN_HOST, () => {
-      console.log(
-        `[aimtutor-ai] ${isProduction ? "production" : "development"} http://${LISTEN_HOST}:${PORT}`,
+      logger.info(
+        {
+          env: isProduction ? "production" : "development",
+          host: LISTEN_HOST,
+          port: PORT,
+        },
+        `[aimtutor-ai] listening http://${LISTEN_HOST}:${PORT}`,
       );
-      console.log(`  GET    /v1/auth/me`);
-      console.log(`  POST   /v1/activity`);
-      console.log(`  GET    /v1/workspaces`);
-      console.log(`  PATCH  /v1/workspaces/:workspaceId`);
-      console.log(`  POST   /v1/workspaces/:workspaceId/folders`);
-      console.log(`  GET    /v1/workspaces/:workspaceId/folders`);
-      console.log(`  PATCH  /v1/folders/:folderId`);
-      console.log(`  DELETE /v1/folders/:folderId`);
-      console.log(`  POST   /v1/folders/:folderId/boards`);
-      console.log(`  GET    /v1/folders/:folderId/boards`);
-      console.log(`  GET    /v1/boards/:boardId`);
-      console.log(`  PUT    /v1/boards/:boardId`);
-      console.log(`  PATCH  /v1/boards/:boardId`);
-      console.log(`  DELETE /v1/boards/:boardId`);
-      console.log(`  GET    /v1/boards/:boardId/ai-chats`);
-      console.log(`  GET    /v1/boards/:boardId/ai-chats/:sessionId`);
-      console.log(`  POST   /v1/boards/:boardId/ai-chats`);
-      console.log(`  PUT    /v1/boards/:boardId/ai-chats/:sessionId`);
-      console.log(`  POST   /v1/ai/text-to-diagram/chat-streaming`);
-      console.log(`  POST   /v1/ai/sidebar-chat-streaming`);
-      console.log(`  POST   /v1/ai/sidebar-chat`);
-      console.log(`  POST   /v1/ai/diagram-to-code/generate`);
+      logger.debug(
+        {
+          routes: [
+            "GET    /health",
+            "GET    /v1/auth/me",
+            "POST   /v1/activity",
+            "GET    /v1/workspaces",
+            "PATCH  /v1/workspaces/:workspaceId",
+            "POST   /v1/workspaces/:workspaceId/folders",
+            "GET    /v1/workspaces/:workspaceId/folders",
+            "PATCH  /v1/folders/:folderId",
+            "DELETE /v1/folders/:folderId",
+            "POST   /v1/folders/:folderId/boards",
+            "GET    /v1/folders/:folderId/boards",
+            "GET    /v1/boards/:boardId",
+            "PUT    /v1/boards/:boardId",
+            "PATCH  /v1/boards/:boardId",
+            "DELETE /v1/boards/:boardId",
+            "GET    /v1/boards/:boardId/ai-chats",
+            "GET    /v1/boards/:boardId/ai-chats/:sessionId",
+            "POST   /v1/boards/:boardId/ai-chats",
+            "PUT    /v1/boards/:boardId/ai-chats/:sessionId",
+            "POST   /v1/ai/text-to-diagram/chat-streaming",
+            "POST   /v1/ai/sidebar-chat-streaming",
+            "POST   /v1/ai/sidebar-chat",
+            "POST   /v1/ai/diagram-to-code/generate",
+          ],
+        },
+        "registered v1 routes",
+      );
     });
 
     const io = new SocketIOServer(server, {
@@ -2331,7 +2265,7 @@ ensureSchema()
     });
 
     const shutdown = (signal) => {
-      console.log(`[aimtutor-ai] ${signal}, shutting down`);
+      logger.info({ signal }, "[aimtutor-ai] shutting down");
       io.close();
       server.close(() => {
         pool.end(() => process.exit(0));
@@ -2342,6 +2276,6 @@ ensureSchema()
     process.on("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((error) => {
-    console.error("Failed to initialize database schema", error);
+    logger.fatal({ err: error }, "Failed to initialize database schema");
     process.exit(1);
   });

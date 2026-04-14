@@ -38,6 +38,7 @@ import {
   postSidebarChatStream,
   putBoardAiChatSession,
   type BoardAiChatSessionSummary,
+  type SidebarChatImage,
   type SidebarChatMessage,
 } from "../data/workspaceApi";
 
@@ -50,8 +51,13 @@ const SIDEBAR_CONTEXT_STORE_CAP = 120;
 const SIDEBAR_MIN_WIDTH = 280;
 const SIDEBAR_MAX_WIDTH = 560;
 const CHAT_HISTORY_MAX = 40;
+/** Drag reference thumbnails onto the canvas; must match App.tsx AIMBOARD_CHAT_IMAGE_DRAG_MIME. */
+const AIMBOARD_CHAT_IMAGE_DRAG_MIME = "application/x-aimboard-chat-image";
 
-/** Remove Markdown images / Unsplash URLs; thumbnails are shown separately in the sidebar. */
+const IMAGE_URL_LINE_RE =
+  /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)(?:\?[^\s]*)?$/i;
+
+/** Remove Markdown images / bare image URLs; thumbnails are shown separately in the sidebar. */
 function stripEmbeddedReferenceImages(text: string): string {
   let s = text.replace(/\r/g, "");
   s = s.replace(/^\s*\d+\.\s*!\[[^\]]*\]\([^)\n]+\)\s*$/gm, "");
@@ -61,15 +67,23 @@ function stripEmbeddedReferenceImages(text: string): string {
     return t ? t : "";
   });
   s = s.replace(
-    /\[([^\]]+)\]\(\s*https?:\/\/[^)\n]*unsplash\.com[^)\n]*\)/gi,
-    (_, label) => String(label).trim(),
+    /\[([^\]]*)\]\(\s*(https?:\/\/[^)\s]+)\s*\)/gi,
+    (full, alt, url) => {
+      const u = String(url).toLowerCase();
+      if (
+        IMAGE_URL_LINE_RE.test(u) ||
+        /[?&]format=(png|jpe?g|webp|gif)/i.test(u) ||
+        /\/(image|img|photo|diagram)\//i.test(u)
+      ) {
+        const t = String(alt).replace(/\s+/g, " ").trim();
+        return t || "";
+      }
+      return full;
+    },
   );
   s = s.replace(/^\s*https?:\/\/[^\s]+\s*$/gm, (line) => {
     const u = line.trim();
-    if (/\/\/([^/]*\.)?unsplash\.com\//i.test(u)) {
-      return "";
-    }
-    return line;
+    return IMAGE_URL_LINE_RE.test(u) ? "" : line;
   });
   s = s.replace(/[ \t]+\n/g, "\n");
   s = s.replace(/\n{3,}/g, "\n\n");
@@ -616,6 +630,8 @@ export const AiSidebarChatProvider: React.FC<{
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
+  /** Latest SSE `images` payload (sync); avoids relying on messagesRef before React re-renders. */
+  const sidebarStreamImagesRef = useRef<SidebarChatImage[]>([]);
 
   messagesRef.current = messages;
   contextMessagesRef.current = contextMessages;
@@ -889,6 +905,7 @@ export const AiSidebarChatProvider: React.FC<{
     ];
     setMessages(sessionWithUser);
     setLoading(true);
+    sidebarStreamImagesRef.current = [];
     try {
       const { text: replyText, images: replyImages } =
         await postSidebarChatStream(getTokenRef.current, trimmedForApi, {
@@ -908,6 +925,7 @@ export const AiSidebarChatProvider: React.FC<{
             });
           },
           onImages: (images) => {
+            sidebarStreamImagesRef.current = images.length ? [...images] : [];
             setMessages((prev) => {
               const next = [...prev];
               const lastIndex = next.length - 1;
@@ -925,13 +943,22 @@ export const AiSidebarChatProvider: React.FC<{
       const persistId = activeSessionIdRef.current;
       const fallback = "I could not generate a response. Please try again.";
       const assistantBody = replyText.trim() ? replyText : fallback;
+      const lastLive = messagesRef.current[messagesRef.current.length - 1];
+      const imagesForFinal =
+        replyImages.length > 0
+          ? replyImages
+          : sidebarStreamImagesRef.current.length > 0
+            ? sidebarStreamImagesRef.current
+            : lastLive?.role === "assistant" && lastLive.images?.length
+              ? lastLive.images
+              : [];
       const finalThread: SidebarChatMessage[] = [
         ...sessionPrior,
         { role: "user", content: text },
         {
           role: "assistant",
           content: assistantBody,
-          ...(replyImages.length ? { images: replyImages } : {}),
+          ...(imagesForFinal.length ? { images: imagesForFinal } : {}),
         },
       ];
       setMessages(finalThread);
@@ -1415,28 +1442,59 @@ export const AiSidebarChat: React.FC = () => {
                         className="aim-ai-chat__illustrations"
                         aria-label="Reference images"
                       >
-                        {m.images.slice(0, 5).map((im, idx) => (
-                          <button
+                        {m.images.slice(0, 4).map((im, idx) => (
+                          <div
                             key={`${im.url}-${idx}`}
-                            type="button"
+                            role="button"
+                            tabIndex={0}
                             className="aim-ai-chat__illustrations-item"
-                            title={im.alt}
+                            title={
+                              im.alt
+                                ? `${im.alt} — drag to board or click to open`
+                                : "Drag to board or click to open"
+                            }
                             aria-label={
                               im.alt
-                                ? `${im.alt} (opens in new tab)`
-                                : "Open reference image"
+                                ? `${im.alt} (drag to canvas or open in new tab)`
+                                : "Reference image — drag to canvas or open in new tab"
                             }
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData(
+                                AIMBOARD_CHAT_IMAGE_DRAG_MIME,
+                                JSON.stringify({
+                                  url: im.url,
+                                  alt: im.alt ?? "",
+                                }),
+                              );
+                              e.dataTransfer.effectAllowed = "copy";
+                            }}
                             onClick={() =>
-                              window.open(im.url, "_blank", "noopener,noreferrer")
+                              window.open(
+                                im.url,
+                                "_blank",
+                                "noopener,noreferrer",
+                              )
                             }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                window.open(
+                                  im.url,
+                                  "_blank",
+                                  "noopener,noreferrer",
+                                );
+                              }
+                            }}
                           >
                             <img
                               src={im.url}
                               alt={im.alt || "Reference image"}
                               loading="lazy"
                               decoding="async"
+                              draggable={false}
                             />
-                          </button>
+                          </div>
                         ))}
                       </div>
                     )}
