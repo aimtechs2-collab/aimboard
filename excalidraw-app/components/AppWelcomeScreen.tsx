@@ -1,6 +1,5 @@
 import React from "react";
 
-import { POINTER_EVENTS } from "@excalidraw/common";
 import { loginIcon } from "@excalidraw/excalidraw/components/icons";
 import { WelcomeScreen } from "@excalidraw/excalidraw/index";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
@@ -15,24 +14,9 @@ export const AppWelcomeScreen: React.FC<{
 }> = React.memo((props) => {
   const { t } = useI18n();
   const { openSignUp, isLoaded, isSignedIn } = useAppAuth();
-  let headingContent;
 
-  if (isClerkEnabled() && isLoaded && isSignedIn) {
-    headingContent = (
-      <>
-        Continue in{" "}
-        <a
-          style={{ pointerEvents: POINTER_EVENTS.inheritFromUI }}
-          href={`${
-            import.meta.env.VITE_APP_PLUS_APP
-          }?utm_source=aimtutor.ai&utm_medium=app&utm_content=welcomeScreenSignedInUser`}
-        >
-          aimtutor.ai+
-        </a>
-      </>
-    );
-  } else {
-    headingContent = (
+  const headingContent =
+    isClerkEnabled() && isLoaded && isSignedIn ? null : (
       <>
         {t("welcomeScreen.app.center_heading")}
         <br />
@@ -41,7 +25,6 @@ export const AppWelcomeScreen: React.FC<{
         {t("welcomeScreen.app.center_heading_line3")}
       </>
     );
-  }
 
   return (
     <WelcomeScreen>
@@ -52,9 +35,11 @@ export const AppWelcomeScreen: React.FC<{
       <WelcomeScreen.Hints.HelpHint />
       <WelcomeScreen.Center>
         <AimtutorWordmark variant="welcome" />
-        <WelcomeScreen.Center.Heading>
-          {headingContent}
-        </WelcomeScreen.Center.Heading>
+        {headingContent != null && (
+          <WelcomeScreen.Center.Heading>
+            {headingContent}
+          </WelcomeScreen.Center.Heading>
+        )}
         <WelcomeScreen.Center.Menu>
           <WelcomeScreen.Center.MenuItemLoadScene />
           <WelcomeScreen.Center.MenuItemHelp />

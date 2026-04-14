@@ -498,6 +498,37 @@ export async function getBoardAiChatSession(
   return parseJson(res);
 }
 
+export async function deleteBoardAiChatSession(
+  getToken: () => Promise<string | null>,
+  boardId: string,
+  sessionId: string,
+): Promise<void> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(
+    `${base}/v1/boards/${boardId}/ai-chats/${sessionId}`,
+    {
+      method: "DELETE",
+      headers: await headersJson(getToken),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    try {
+      const j = JSON.parse(text) as { message?: string };
+      if (j?.message) {
+        msg = j.message;
+      }
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+}
+
 export async function createBoardAiChatSession(
   getToken: () => Promise<string | null>,
   boardId: string,

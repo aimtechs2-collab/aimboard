@@ -12,7 +12,11 @@ import "katex/dist/katex.min.css";
 import { getFontEmbedCSS, toPng } from "html-to-image";
 
 import { Button } from "@excalidraw/excalidraw/components/Button";
-import { historyIcon, PlusIcon } from "@excalidraw/excalidraw/components/icons";
+import {
+  historyIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@excalidraw/excalidraw/components/icons";
 import { Tooltip } from "@excalidraw/excalidraw/components/Tooltip";
 import { useTunnels } from "@excalidraw/excalidraw/context/tunnels";
 import { t } from "@excalidraw/excalidraw/i18n";
@@ -33,6 +37,7 @@ import {
 } from "./aiChatSurfaceSync";
 import {
   createBoardAiChatSession,
+  deleteBoardAiChatSession,
   getBoardAiChatSession,
   listBoardAiChats,
   postSidebarChatStream,
@@ -88,6 +93,26 @@ function stripEmbeddedReferenceImages(text: string): string {
   s = s.replace(/[ \t]+\n/g, "\n");
   s = s.replace(/\n{3,}/g, "\n\n");
   return s.trimEnd();
+}
+
+/** Shown while the assistant reply is pending or still streaming. */
+function AiChatTypingIndicator({ compact }: { compact?: boolean }) {
+  return (
+    <div
+      className={
+        compact
+          ? "aim-ai-chat__typing aim-ai-chat__typing--compact"
+          : "aim-ai-chat__typing"
+      }
+      role="status"
+      aria-live="polite"
+      aria-label="Assistant is replying"
+    >
+      <span className="aim-ai-chat__typing-dot" />
+      <span className="aim-ai-chat__typing-dot" />
+      <span className="aim-ai-chat__typing-dot" />
+    </div>
+  );
 }
 
 type SavedChatSession = {
@@ -576,6 +601,8 @@ type AiSidebarChatContextValue = {
   serverSessions: BoardAiChatSessionSummary[];
   restoreLocalSession: (session: SavedChatSession) => void;
   restoreServerSession: (sessionId: string) => Promise<void>;
+  deleteServerSession: (sessionId: string) => Promise<void>;
+  deleteLocalSession: (sessionId: string) => void;
   startNewChat: () => Promise<void>;
   send: () => Promise<void>;
   onKeyDown: (e: React.KeyboardEvent) => void;
@@ -858,6 +885,78 @@ export const AiSidebarChatProvider: React.FC<{
     },
     [boardId, persistBoardSession, refreshServerSessions, excalidrawAPI],
   );
+
+  const deleteServerSession = useCallback(
+    async (sessionId: string) => {
+      if (!boardId) {
+        return;
+      }
+      try {
+        await deleteBoardAiChatSession(getTokenRef.current, boardId, sessionId);
+      } catch {
+        excalidrawAPI?.setToast({ message: "Could not delete chat" });
+        return;
+      }
+      const wasActive = activeSessionIdRef.current === sessionId;
+      let list: BoardAiChatSessionSummary[] = [];
+      try {
+        list = await listBoardAiChats(getTokenRef.current, boardId);
+        setServerSessions(list);
+      } catch {
+        setServerSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        excalidrawAPI?.setToast({ message: "Could not refresh chat list" });
+        if (wasActive) {
+          setActiveSessionId(null);
+          activeSessionIdRef.current = null;
+          setMessages([]);
+          setContextMessages([]);
+          setError(null);
+          setInput("");
+        }
+        return;
+      }
+
+      if (!wasActive) {
+        return;
+      }
+
+      if (list.length === 0) {
+        setActiveSessionId(null);
+        activeSessionIdRef.current = null;
+        setMessages([]);
+        setContextMessages([]);
+        setError(null);
+        setInput("");
+        return;
+      }
+
+      const next = list[0];
+      try {
+        const full = await getBoardAiChatSession(
+          getTokenRef.current,
+          boardId,
+          next.id,
+        );
+        setActiveSessionId(full.session.id);
+        activeSessionIdRef.current = full.session.id;
+        setMessages(full.messages.map((m) => ({ ...m })));
+        setContextMessages(full.contextMessages.map((m) => ({ ...m })));
+        setError(null);
+        setInput("");
+      } catch {
+        setActiveSessionId(null);
+        activeSessionIdRef.current = null;
+        setMessages([]);
+        setContextMessages([]);
+        excalidrawAPI?.setToast({ message: "Could not load next chat" });
+      }
+    },
+    [boardId, excalidrawAPI],
+  );
+
+  const deleteLocalSession = useCallback((sessionId: string) => {
+    setPastSessions((prev) => prev.filter((s) => s.id !== sessionId));
+  }, []);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -1210,6 +1309,8 @@ export const AiSidebarChatProvider: React.FC<{
     serverSessions,
     restoreLocalSession,
     restoreServerSession,
+    deleteServerSession,
+    deleteLocalSession,
     startNewChat,
     send,
     onKeyDown,
@@ -1257,6 +1358,8 @@ export const AiSidebarChat: React.FC = () => {
     serverSessions,
     restoreLocalSession,
     restoreServerSession,
+    deleteServerSession,
+    deleteLocalSession,
     startNewChat,
     send,
     onKeyDown,
@@ -1344,7 +1447,7 @@ export const AiSidebarChat: React.FC = () => {
                   Close
                 </button>
               </div>
-              <div className="aim-ai-chat__history-list">
+              <div className="aim-ai-chat__history-list" role="list">
                 {boardId ? (
                   serverSessions.length === 0 ? (
                     <p className="aim-ai-chat__history-empty">
@@ -1353,25 +1456,58 @@ export const AiSidebarChat: React.FC = () => {
                     </p>
                   ) : (
                     serverSessions.map((s) => (
-                      <button
+                      <div
                         key={s.id}
-                        type="button"
-                        className="aim-ai-chat__history-item"
-                        onClick={() => void restoreServerSession(s.id)}
+                        className="aim-ai-chat__history-row"
+                        role="listitem"
                       >
-                        <span className="aim-ai-chat__history-item-title">
-                          {s.title}
-                        </span>
-                        <span className="aim-ai-chat__history-item-meta">
-                          {new Date(s.updatedAt).toLocaleString(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          })}
-                          {s.messageCount > 0
-                            ? ` · ${s.messageCount} messages`
-                            : ""}
-                        </span>
-                      </button>
+                        <button
+                          type="button"
+                          className="aim-ai-chat__history-item-main"
+                          onClick={() => void restoreServerSession(s.id)}
+                        >
+                          <span className="aim-ai-chat__history-item-title">
+                            {s.title}
+                          </span>
+                          <span className="aim-ai-chat__history-item-meta">
+                            <time dateTime={s.updatedAt}>
+                              {new Date(s.updatedAt).toLocaleString(undefined, {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              })}
+                            </time>
+                            {s.messageCount > 0 ? (
+                              <>
+                                <span
+                                  className="aim-ai-chat__history-item-meta-sep"
+                                  aria-hidden
+                                >
+                                  ·
+                                </span>
+                                <span>
+                                  {s.messageCount}{" "}
+                                  {s.messageCount === 1 ? "message" : "messages"}
+                                </span>
+                              </>
+                            ) : null}
+                          </span>
+                        </button>
+                        <div className="aim-ai-chat__history-delete-wrap">
+                          <Tooltip label="Delete chat">
+                            <button
+                              type="button"
+                              className="aim-ai-chat__history-item-delete"
+                              aria-label="Delete chat"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteServerSession(s.id);
+                              }}
+                            >
+                              {TrashIcon}
+                            </button>
+                          </Tooltip>
+                        </div>
+                      </div>
                     ))
                   )
                 ) : pastSessions.length === 0 ? (
@@ -1382,22 +1518,51 @@ export const AiSidebarChat: React.FC = () => {
                   </p>
                 ) : (
                   pastSessions.map((s) => (
-                    <button
+                    <div
                       key={s.id}
-                      type="button"
-                      className="aim-ai-chat__history-item"
-                      onClick={() => restoreLocalSession(s)}
+                      className="aim-ai-chat__history-row"
+                      role="listitem"
                     >
-                      <span className="aim-ai-chat__history-item-title">
-                        {s.title}
-                      </span>
-                      <span className="aim-ai-chat__history-item-meta">
-                        {new Date(s.savedAt).toLocaleString(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        className="aim-ai-chat__history-item-main"
+                        onClick={() => restoreLocalSession(s)}
+                      >
+                        <span className="aim-ai-chat__history-item-title">
+                          {s.title}
+                        </span>
+                        <span className="aim-ai-chat__history-item-meta">
+                          <time dateTime={new Date(s.savedAt).toISOString()}>
+                            {new Date(s.savedAt).toLocaleString(undefined, {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })}
+                          </time>
+                          <span
+                            className="aim-ai-chat__history-item-meta-sep"
+                            aria-hidden
+                          >
+                            ·
+                          </span>
+                          <span>Saved locally</span>
+                        </span>
+                      </button>
+                      <div className="aim-ai-chat__history-delete-wrap">
+                        <Tooltip label="Delete chat">
+                          <button
+                            type="button"
+                            className="aim-ai-chat__history-item-delete"
+                            aria-label="Delete chat"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteLocalSession(s.id);
+                            }}
+                          >
+                            {TrashIcon}
+                          </button>
+                        </Tooltip>
+                      </div>
+                    </div>
                   ))
                 )}
               </div>
@@ -1422,6 +1587,17 @@ export const AiSidebarChat: React.FC = () => {
               i < messages.length - 1;
             const showCopyFullReply =
               isAssistant && m.content.trim() && replyComplete;
+            const isStreamingAssistant =
+              loading && isAssistant && i === messages.length - 1;
+            const hasAssistantText = m.content.trim().length > 0;
+            const hasAssistantImages = (m.images?.length ?? 0) > 0;
+            const showPlaceholderTyping =
+              isStreamingAssistant &&
+              !hasAssistantText &&
+              !hasAssistantImages;
+            const showTypingTail =
+              isStreamingAssistant &&
+              (hasAssistantText || hasAssistantImages);
             return (
               <div
                 key={i}
@@ -1429,14 +1605,17 @@ export const AiSidebarChat: React.FC = () => {
               >
                 {isAssistant ? (
                   <>
-                    <div className="aim-ai-chat__md">
-                      {renderAssistantMessage(m.content, {
-                        onCopyCode,
-                        onInsertCode,
-                        onCopyMath,
-                        onInsertMath,
-                      })}
-                    </div>
+                    {showPlaceholderTyping && <AiChatTypingIndicator />}
+                    {hasAssistantText && (
+                      <div className="aim-ai-chat__md">
+                        {renderAssistantMessage(m.content, {
+                          onCopyCode,
+                          onInsertCode,
+                          onCopyMath,
+                          onInsertMath,
+                        })}
+                      </div>
+                    )}
                     {m.images && m.images.length > 0 && (
                       <div
                         className="aim-ai-chat__illustrations"
@@ -1498,6 +1677,7 @@ export const AiSidebarChat: React.FC = () => {
                         ))}
                       </div>
                     )}
+                    {showTypingTail && <AiChatTypingIndicator compact />}
                     {showCopyFullReply && (
                       <div className="aim-ai-chat__response-footer">
                         <button

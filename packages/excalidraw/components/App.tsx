@@ -3862,15 +3862,54 @@ class App extends React.Component<AppProps, AppState> {
         return;
       }
 
-      const elementUnderCursor = document.elementFromPoint(
-        this.lastViewportPosition.x,
-        this.lastViewportPosition.y,
-      );
-      if (
-        event &&
-        (!(elementUnderCursor instanceof HTMLCanvasElement) ||
-          isWritableElement(target))
-      ) {
+      if (event && isWritableElement(target)) {
+        return;
+      }
+
+      /** True if any element under the pointer is an Excalidraw scene canvas (not only topmost). */
+      const pointerOverExcalidrawCanvas = (
+        clientX: number,
+        clientY: number,
+      ): boolean => {
+        const stack = document.elementsFromPoint(clientX, clientY);
+        for (const n of stack) {
+          if (
+            n instanceof HTMLCanvasElement &&
+            n.classList.contains("excalidraw__canvas")
+          ) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      let clipboardHasImage = false;
+      if (event.clipboardData?.items) {
+        for (const item of Array.from(event.clipboardData.items)) {
+          if (item.kind === "file" && item.type.startsWith("image/")) {
+            clipboardHasImage = true;
+            break;
+          }
+        }
+      }
+
+      let { x: pastePx, y: pastePy } = this.lastViewportPosition;
+      let overCanvas = pointerOverExcalidrawCanvas(pastePx, pastePy);
+
+      if (!overCanvas && clipboardHasImage) {
+        const root = this.excalidrawContainerRef.current;
+        if (root) {
+          const r = root.getBoundingClientRect();
+          pastePx =
+            r.left + Math.min(r.width * 0.38, Math.max(40, r.width - 120));
+          pastePy = r.top + r.height / 2;
+          this.lastViewportPosition.x = pastePx;
+          this.lastViewportPosition.y = pastePy;
+          overCanvas = pointerOverExcalidrawCanvas(pastePx, pastePy);
+        }
+      }
+
+      if (event && !clipboardHasImage && !overCanvas) {
         return;
       }
 

@@ -1601,6 +1601,33 @@ app.put(
   }),
 );
 
+app.delete(
+  "/v1/boards/:boardId/ai-chats/:sessionId",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) return;
+    const auth = requireAuthApi(req, res);
+    if (!auth) return;
+    const localUserId = await upsertUserFromAuth(auth);
+    const boardId = req.params.boardId;
+    const sessionId = req.params.sessionId;
+    const board = await assertBoardOwned(boardId, localUserId);
+    if (!board) {
+      res.locals.auditError = "board not found";
+      res.status(404).json({ message: "Board not found" });
+      return;
+    }
+    const session = await assertBoardAiSessionOwned(sessionId, boardId, localUserId);
+    if (!session) {
+      res.locals.auditError = "chat session not found";
+      res.status(404).json({ message: "Chat session not found" });
+      return;
+    }
+    await pool.query(`DELETE FROM board_ai_chat_sessions WHERE id = $1`, [sessionId]);
+    res.locals.auditDetails = { kind: "board_ai_chat_delete", sessionId };
+    res.status(204).end();
+  }),
+);
+
 app.post(
   "/v1/ai/text-to-diagram/chat-streaming",
   asyncRoute(async (req, res) => {
@@ -2188,6 +2215,7 @@ ensureSchema()
             "GET    /v1/boards/:boardId/ai-chats/:sessionId",
             "POST   /v1/boards/:boardId/ai-chats",
             "PUT    /v1/boards/:boardId/ai-chats/:sessionId",
+            "DELETE /v1/boards/:boardId/ai-chats/:sessionId",
             "POST   /v1/ai/text-to-diagram/chat-streaming",
             "POST   /v1/ai/sidebar-chat-streaming",
             "POST   /v1/ai/sidebar-chat",
