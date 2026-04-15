@@ -20,7 +20,7 @@ import {
   expandImageSearchQueriesOllama,
   expandImageSearchQueriesOpenAI,
 } from "./lib/imageQueryOpenAI.mjs";
-import { httpLogger, logger } from "./lib/logger.mjs";
+import { logger } from "./lib/logger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -311,6 +311,56 @@ const pool = new Pool({
   connectionTimeoutMillis: resolveConnectionTimeoutMillis(),
 });
 
+let dbConnectionHealthy = null;
+let dbMonitorInterval = null;
+
+async function probeDbHealth() {
+  const startedAt = Date.now();
+  try {
+    await pool.query("SELECT 1");
+    return {
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      error: err?.message || "database probe failed",
+    };
+  }
+}
+
+async function monitorDbConnectivity() {
+  if (!process.env.NEON_DATABASE_URL) {
+    return;
+  }
+  const status = await probeDbHealth();
+  if (dbConnectionHealthy === status.ok) {
+    return;
+  }
+  dbConnectionHealthy = status.ok;
+  if (status.ok) {
+    logger.info(
+      {
+        module: "dbMonitor",
+        latencyMs: status.latencyMs,
+      },
+      "[db] connected",
+    );
+  } else {
+    logger.error(
+      {
+        module: "dbMonitor",
+        latencyMs: status.latencyMs,
+        error: status.error,
+      },
+      "[db] down",
+    );
+  }
+}
+
 pool.on("error", (err) => {
   logger.error(
     { err, module: "pgPool" },
@@ -416,7 +466,17 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "32mb" }));
-app.use(httpLogger);
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    const elapsedMs = Date.now() - startedAt;
+    const url = req.originalUrl || req.url;
+    logger.info(
+      `[req] ${req.method} ${url} ${res.statusCode} ${elapsedMs}ms`,
+    );
+  });
+  next();
+});
 
 const v1Limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -449,6 +509,35 @@ app.use(auditV1Requests);
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "aimtutor-ai-backend" });
 });
+
+app.get(
+  "/health/db",
+  asyncRoute(async (_req, res) => {
+    if (!process.env.NEON_DATABASE_URL) {
+      res.status(503).json({
+        ok: false,
+        db: "down",
+        message: "NEON_DATABASE_URL is not configured",
+      });
+      return;
+    }
+    const status = await probeDbHealth();
+    if (status.ok) {
+      res.json({
+        ok: true,
+        db: "up",
+        latencyMs: status.latencyMs,
+      });
+      return;
+    }
+    res.status(503).json({
+      ok: false,
+      db: "down",
+      latencyMs: status.latencyMs,
+      error: status.error,
+    });
+  }),
+);
 
 app.get(
   "/v1/ai/ollama/models",
@@ -2165,6 +2254,10 @@ function fallbackImageSearchQuery(trimmed) {
     users.length >= 2
       ? String(users[users.length - 2]?.content ?? "").trim()
       : "";
+  const normalizedLast = last.toLowerCase().replace(/[.!?]+$/g, "").trim();
+  const isGenericFollowUp = /^(ok|okay|k|yes|yep|sure|continue|go on|next|more|same|keep going|continue please|more please|again)$/i.test(
+    normalizedLast,
+  );
   const shortVisualOnly =
     last.length < 56 &&
     /\b(image|images|diagram|picture|pictures|photo|photos|visual)\b/i.test(
@@ -2173,8 +2266,9 @@ function fallbackImageSearchQuery(trimmed) {
   if (shortVisualOnly && prev.length > 2) {
     return prev.slice(0, 200);
   }
-  // Short follow-ups ("ok", "more", "yes"): keep images aligned with the prior topic.
-  if (last.length < 20 && prev.length > 10) {
+  // Short generic follow-ups ("ok", "more", "yes"): keep images aligned with the prior topic.
+  // But explicit short topic shifts like "docker" should use the new prompt.
+  if (isGenericFollowUp && prev.length > 10) {
     return prev.slice(0, 200);
   }
   return (last || "teaching reference").slice(0, 200);
@@ -2721,7 +2815,15 @@ app.use((_req, res) => {
 });
 
 app.use((err, req, res, _next) => {
-  (req.log || logger).error({ err }, "[aimtutor-ai] unhandled error");
+  (req.log || logger).error(
+    {
+      method: req.method,
+      url: req.originalUrl || req.url,
+      error: err?.message || "unhandled error",
+      stack: err?.stack,
+    },
+    "[error]",
+  );
   if (res.headersSent) {
     return;
   }
@@ -2733,6 +2835,11 @@ app.use((err, req, res, _next) => {
 
 ensureSchema()
   .then(() => {
+    void monitorDbConnectivity();
+    dbMonitorInterval = setInterval(() => {
+      void monitorDbConnectivity();
+    }, 15_000);
+
     const server = app.listen(PORT, LISTEN_HOST, () => {
       logger.info(
         {
@@ -2746,6 +2853,7 @@ ensureSchema()
         {
           routes: [
             "GET    /health",
+            "GET    /health/db",
             "GET    /v1/auth/me",
             "POST   /v1/activity",
             "GET    /v1/workspaces",
@@ -2844,6 +2952,9 @@ ensureSchema()
 
     const shutdown = (signal) => {
       logger.info({ signal }, "[aimtutor-ai] shutting down");
+      if (dbMonitorInterval) {
+        clearInterval(dbMonitorInterval);
+      }
       io.close();
       server.close(() => {
         pool.end(() => process.exit(0));

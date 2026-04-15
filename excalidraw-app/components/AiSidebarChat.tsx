@@ -13,6 +13,7 @@ import { getFontEmbedCSS, toPng } from "html-to-image";
 
 import { Button } from "@excalidraw/excalidraw/components/Button";
 import {
+  DotsIcon,
   historyIcon,
   PlusIcon,
   TrashIcon,
@@ -1565,6 +1566,30 @@ export const AiSidebarChat: React.FC = () => {
   useLayoutEffect(() => {
     bumpAiChatSurface();
   }, []);
+  const providerMenuRef = useRef<HTMLDivElement>(null);
+  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!providerMenuOpen) {
+      return;
+    }
+    const onPointerDown = (e: PointerEvent) => {
+      const el = providerMenuRef.current;
+      if (el && !el.contains(e.target as Node)) {
+        setProviderMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setProviderMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [providerMenuOpen]);
   const ctx = React.useContext(AiSidebarChatContext);
   if (!ctx) {
     throw new Error("AiSidebarChat must be used within AiSidebarChatProvider");
@@ -1640,22 +1665,6 @@ export const AiSidebarChat: React.FC = () => {
               <option value="images">Images</option>
               <option value="topic_plus_images">Topic + images</option>
               <option value="chat">Chat</option>
-            </select>
-          </div>
-          <div className="aim-ai-chat-mode-wrap">
-            <label className="aim-ai-chat-mode-label" htmlFor="aim-sidebar-ai-provider">
-              Provider
-            </label>
-            <select
-              id="aim-sidebar-ai-provider"
-              className="aim-ai-chat-mode-select"
-              value={aiProvider}
-              onChange={(e) => setAiProvider(e.target.value as AiProvider)}
-              aria-label="AI provider: OpenAI or GPU (Ollama)"
-              disabled={loading}
-            >
-              <option value="openai">OpenAI LLM</option>
-              <option value="ollama">GPU</option>
             </select>
           </div>
           <Tooltip label={t("labels.aiChatHistory")}>
@@ -2030,14 +2039,66 @@ export const AiSidebarChat: React.FC = () => {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <button
-            type="button"
-            className="aim-ai-chat__send"
-            disabled={loading || !input.trim()}
-            onClick={() => void send()}
-          >
-            Send
-          </button>
+          <div className="aim-ai-chat__composer-actions">
+            <div
+              className={`aim-ai-chat__provider-menu-wrap${providerMenuOpen ? " aim-ai-chat__provider-menu-wrap--open" : ""}`}
+              ref={providerMenuRef}
+            >
+              <Tooltip label="AI provider">
+                <button
+                  type="button"
+                  className="aim-ai-chat__provider-menu-trigger"
+                  aria-expanded={providerMenuOpen}
+                  aria-haspopup="listbox"
+                  aria-label="Choose AI provider: OpenAI or GPU"
+                  disabled={loading}
+                  onClick={() => setProviderMenuOpen((open) => !open)}
+                >
+                  {DotsIcon}
+                </button>
+              </Tooltip>
+              {providerMenuOpen ? (
+                <div
+                  className="aim-ai-chat__provider-menu"
+                  role="listbox"
+                  aria-label="AI provider"
+                >
+                  <button
+                    type="button"
+                    className="aim-ai-chat__provider-menu-item"
+                    role="option"
+                    aria-selected={aiProvider === "openai"}
+                    onClick={() => {
+                      setAiProvider("openai");
+                      setProviderMenuOpen(false);
+                    }}
+                  >
+                    OpenAI LLM
+                  </button>
+                  <button
+                    type="button"
+                    className="aim-ai-chat__provider-menu-item"
+                    role="option"
+                    aria-selected={aiProvider === "ollama"}
+                    onClick={() => {
+                      setAiProvider("ollama");
+                      setProviderMenuOpen(false);
+                    }}
+                  >
+                    GPU
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="aim-ai-chat__send"
+              disabled={loading || !input.trim()}
+              onClick={() => void send()}
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </>

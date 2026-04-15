@@ -1,6 +1,6 @@
 /**
- * Structured logging (Pino). HTTP request/response lines via pino-http in server.mjs.
- * Dev: LOG_PRETTY=1 (default when NODE_ENV is not production) uses pino-pretty if installed.
+ * Structured logging (Pino). Request lines are logged in server.mjs (single-line in dev via pino-pretty).
+ * Dev: LOG_PRETTY=1 (default when NODE_ENV is not production) uses pino-pretty if installed (single-line output).
  */
 import { createRequire } from "node:module";
 
@@ -40,6 +40,7 @@ if (wantPretty) {
           colorize: true,
           translateTime: "SYS:HH:MM:ss",
           ignore: "pid,hostname",
+          singleLine: true,
         },
       },
     });
