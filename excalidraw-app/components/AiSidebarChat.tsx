@@ -38,11 +38,13 @@ import {
 import {
   createBoardAiChatSession,
   deleteBoardAiChatSession,
+  fetchOllamaModels,
   getBoardAiChatSession,
   listBoardAiChats,
   postSidebarChatStream,
   putBoardAiChatSession,
   sidebarMessagesForApi,
+  type AiProvider,
   type BoardAiChatSessionSummary,
   type SidebarChatImage,
   type SidebarChatMessage,
@@ -59,6 +61,8 @@ const SIDEBAR_MIN_WIDTH = 280;
 const SIDEBAR_MAX_WIDTH = 560;
 const CHAT_HISTORY_MAX = 40;
 const SIDEBAR_MODE_STORAGE_KEY = "aim-sidebar-chat-mode";
+const SIDEBAR_PROVIDER_STORAGE_KEY = "aim-sidebar-ai-provider";
+const SIDEBAR_OLLAMA_MODEL_STORAGE_KEY = "aim-sidebar-ollama-model";
 /** Shown reference thumbnails: Images mode fetches more from the API. */
 const SIDEBAR_IMAGE_GRID_CAP_TOPIC = 4;
 const SIDEBAR_IMAGE_GRID_CAP_IMAGES_ONLY = 10;
@@ -73,6 +77,26 @@ function readStoredSidebarMode(): SidebarChatMode {
     /* ignore */
   }
   return "topic_plus_images";
+}
+
+function readStoredSidebarProvider(): AiProvider {
+  try {
+    const v = localStorage.getItem(SIDEBAR_PROVIDER_STORAGE_KEY);
+    if (v === "openai" || v === "ollama") {
+      return v;
+    }
+  } catch {
+    /* ignore */
+  }
+  return "openai";
+}
+
+function readStoredOllamaModel(): string {
+  try {
+    return (localStorage.getItem(SIDEBAR_OLLAMA_MODEL_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 /** Drag reference thumbnails onto the canvas; must match App.tsx AIMBOARD_CHAT_IMAGE_DRAG_MIME. */
@@ -520,7 +544,27 @@ const renderAssistantMessage = (
     codeLanguage = "";
   };
 
-  for (const line of lines) {
+  const splitTableCells = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+  const isTableSeparator = (line: string) => {
+    const cells = splitTableCells(line);
+    return (
+      cells.length > 0 &&
+      cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+    );
+  };
+
+  const isTableCandidate = (line: string) =>
+    line.includes("|") && splitTableCells(line).length >= 2;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     const trimmed = line.trim();
     const fenceMatch = trimmed.match(/^```([\w+-]+)?\s*$/);
     if (fenceMatch) {
@@ -546,6 +590,68 @@ const renderAssistantMessage = (
       flushList();
       continue;
     }
+
+    const nextTrimmed = (lines[lineIndex + 1] ?? "").trim();
+    if (
+      isTableCandidate(trimmed) &&
+      isTableSeparator(nextTrimmed)
+    ) {
+      flushParagraph();
+      flushList();
+      const headers = splitTableCells(trimmed);
+      const rows: string[][] = [];
+      let i = lineIndex + 2;
+      while (i < lines.length) {
+        const candidate = lines[i].trim();
+        if (!candidate || !isTableCandidate(candidate)) {
+          break;
+        }
+        rows.push(splitTableCells(candidate));
+        i += 1;
+      }
+      const colCount = Math.max(
+        headers.length,
+        ...rows.map((r) => r.length),
+      );
+      const normalizedHeaders = Array.from({ length: colCount }, (_, c) =>
+        headers[c] ?? "",
+      );
+      nodes.push(
+        <div key={`table-${nodes.length}`} className="aim-ai-chat__md-table-wrap">
+          <table className="aim-ai-chat__md-table">
+            <thead>
+              <tr>
+                {normalizedHeaders.map((h, idx) => (
+                  <th key={idx}>
+                    {renderTextWithMath(h, `th-${nodes.length}-${idx}`, actions)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            {rows.length > 0 && (
+              <tbody>
+                {rows.map((row, rIdx) => (
+                  <tr key={rIdx}>
+                    {Array.from({ length: colCount }, (_, cIdx) => (
+                      <td key={cIdx}>
+                        {renderTextWithMath(
+                          row[cIdx] ?? "",
+                          `td-${nodes.length}-${rIdx}-${cIdx}`,
+                          actions,
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            )}
+          </table>
+        </div>,
+      );
+      lineIndex = i - 1;
+      continue;
+    }
+
     const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
     if (headingMatch) {
       flushParagraph();
@@ -642,6 +748,13 @@ type AiSidebarChatContextValue = {
   listRef: React.RefObject<HTMLDivElement | null>;
   sidebarChatMode: SidebarChatMode;
   setSidebarChatMode: React.Dispatch<React.SetStateAction<SidebarChatMode>>;
+  aiProvider: AiProvider;
+  setAiProvider: React.Dispatch<React.SetStateAction<AiProvider>>;
+  ollamaModel: string;
+  setOllamaModel: React.Dispatch<React.SetStateAction<string>>;
+  ollamaModels: string[];
+  refreshOllamaModels: () => Promise<void>;
+  ollamaModelsLoading: boolean;
 };
 
 const AiSidebarChatContext =
@@ -673,6 +786,12 @@ export const AiSidebarChatProvider: React.FC<{
   const [sidebarChatMode, setSidebarChatMode] = useState<SidebarChatMode>(
     readStoredSidebarMode,
   );
+  const [aiProvider, setAiProvider] = useState<AiProvider>(
+    readStoredSidebarProvider,
+  );
+  const [ollamaModel, setOllamaModel] = useState<string>(readStoredOllamaModel);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const chatRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<SidebarChatMessage[]>([]);
@@ -695,6 +814,47 @@ export const AiSidebarChatProvider: React.FC<{
       /* ignore */
     }
   }, [sidebarChatMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_PROVIDER_STORAGE_KEY, aiProvider);
+    } catch {
+      /* ignore */
+    }
+  }, [aiProvider]);
+
+  useEffect(() => {
+    try {
+      if (ollamaModel.trim()) {
+        localStorage.setItem(SIDEBAR_OLLAMA_MODEL_STORAGE_KEY, ollamaModel.trim());
+      } else {
+        localStorage.removeItem(SIDEBAR_OLLAMA_MODEL_STORAGE_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [ollamaModel]);
+
+  const refreshOllamaModels = useCallback(async () => {
+    setOllamaModelsLoading(true);
+    try {
+      const models = await fetchOllamaModels(getTokenRef.current);
+      setOllamaModels(models);
+      if (!ollamaModel && models.length > 0) {
+        setOllamaModel(models[0]);
+      }
+    } catch {
+      setOllamaModels([]);
+    } finally {
+      setOllamaModelsLoading(false);
+    }
+  }, [ollamaModel]);
+
+  useEffect(() => {
+    if (aiProvider === "ollama" && !ollamaModelsLoading && ollamaModels.length === 0) {
+      void refreshOllamaModels();
+    }
+  }, [aiProvider, ollamaModelsLoading, ollamaModels.length, refreshOllamaModels]);
 
   const refreshServerSessions = useCallback(async () => {
     if (!boardId) {
@@ -1042,6 +1202,8 @@ export const AiSidebarChatProvider: React.FC<{
       const { text: replyText, images: replyImages } =
         await postSidebarChatStream(getTokenRef.current, trimmedForApi, {
           mode: sidebarChatMode,
+          provider: aiProvider,
+          model: aiProvider === "ollama" ? ollamaModel.trim() || undefined : undefined,
           onChunk: (chunk) => {
             setMessages((prev) => {
               const next = [...prev];
@@ -1124,6 +1286,8 @@ export const AiSidebarChatProvider: React.FC<{
     persistBoardSession,
     refreshServerSessions,
     sidebarChatMode,
+    aiProvider,
+    ollamaModel,
   ]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1376,6 +1540,13 @@ export const AiSidebarChatProvider: React.FC<{
     listRef,
     sidebarChatMode,
     setSidebarChatMode,
+    aiProvider,
+    setAiProvider,
+    ollamaModel,
+    setOllamaModel,
+    ollamaModels,
+    refreshOllamaModels,
+    ollamaModelsLoading,
   };
 
   return (
@@ -1427,6 +1598,13 @@ export const AiSidebarChat: React.FC = () => {
     listRef,
     sidebarChatMode,
     setSidebarChatMode,
+    aiProvider,
+    setAiProvider,
+    ollamaModel,
+    setOllamaModel,
+    ollamaModels,
+    refreshOllamaModels,
+    ollamaModelsLoading,
   } = ctx;
   const { AiSidebarHeaderActionsTunnel } = useTunnels();
 
@@ -1462,6 +1640,22 @@ export const AiSidebarChat: React.FC = () => {
               <option value="images">Images</option>
               <option value="topic_plus_images">Topic + images</option>
               <option value="chat">Chat</option>
+            </select>
+          </div>
+          <div className="aim-ai-chat-mode-wrap">
+            <label className="aim-ai-chat-mode-label" htmlFor="aim-sidebar-ai-provider">
+              Provider
+            </label>
+            <select
+              id="aim-sidebar-ai-provider"
+              className="aim-ai-chat-mode-select"
+              value={aiProvider}
+              onChange={(e) => setAiProvider(e.target.value as AiProvider)}
+              aria-label="AI provider: OpenAI or GPU (Ollama)"
+              disabled={loading}
+            >
+              <option value="openai">OpenAI LLM</option>
+              <option value="ollama">GPU</option>
             </select>
           </div>
           <Tooltip label={t("labels.aiChatHistory")}>
@@ -1796,6 +1990,37 @@ export const AiSidebarChat: React.FC = () => {
           </div>
         )}
         <div className="aim-ai-chat__composer">
+          {aiProvider === "ollama" && (
+            <div className="aim-ai-chat__provider-row">
+              <label htmlFor="aim-sidebar-ollama-model">GPU model</label>
+              <select
+                id="aim-sidebar-ollama-model"
+                className="aim-ai-chat-mode-select"
+                value={ollamaModel}
+                disabled={loading || ollamaModelsLoading}
+                onFocus={() => {
+                  if (ollamaModels.length === 0) {
+                    void refreshOllamaModels();
+                  }
+                }}
+                onChange={(e) => setOllamaModel(e.target.value)}
+              >
+                {ollamaModels.length === 0 ? (
+                  <option value={ollamaModel || ""}>
+                    {ollamaModelsLoading
+                      ? "Loading models..."
+                      : ollamaModel || "No models found"}
+                  </option>
+                ) : (
+                  ollamaModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+          )}
           <textarea
             className="aim-ai-chat__input"
             rows={3}

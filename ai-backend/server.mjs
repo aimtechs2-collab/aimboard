@@ -16,7 +16,10 @@ import {
   fetchImagesWithMetaFromQueries,
   isAllowedChatImageUrl,
 } from "./lib/googleImageSearch.mjs";
-import { expandImageSearchQueriesOpenAI } from "./lib/imageQueryOpenAI.mjs";
+import {
+  expandImageSearchQueriesOllama,
+  expandImageSearchQueriesOpenAI,
+} from "./lib/imageQueryOpenAI.mjs";
 import { httpLogger, logger } from "./lib/logger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +49,150 @@ const LISTEN_HOST =
   (isProduction ? "0.0.0.0" : "127.0.0.1");
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+const OLLAMA_BASE_URL =
+  process.env.OLLAMA_BASE_URL?.trim() || "http://45.198.59.91:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL_DEFAULT || "llama3.1:8b";
+const OLLAMA_TIMEOUT_MS = parseInt(
+  process.env.OLLAMA_TIMEOUT_MS || "120000",
+  10,
+);
+const AI_PROVIDER_DEFAULT =
+  process.env.AI_PROVIDER_DEFAULT === "ollama" ? "ollama" : "openai";
+
+function parseAiProvider(body) {
+  const raw = typeof body?.provider === "string" ? body.provider.trim() : "";
+  if (raw === "ollama" || raw === "gpu") {
+    return "ollama";
+  }
+  if (raw === "openai") {
+    return "openai";
+  }
+  return AI_PROVIDER_DEFAULT;
+}
+
+function parseAiModel(body, provider, fallback) {
+  const fromBody =
+    typeof body?.model === "string" ? body.model.trim().slice(0, 120) : "";
+  if (fromBody) return fromBody;
+  if (provider === "ollama") return OLLAMA_MODEL;
+  return fallback;
+}
+
+function requireAiProvider(res, provider) {
+  if (provider === "openai") {
+    if (!process.env.OPENAI_API_KEY) {
+      res.locals.auditError = "OPENAI_API_KEY is not set";
+      res.status(500).json({
+        message: isProduction
+          ? "Server configuration error"
+          : "OPENAI_API_KEY is not set. Add it to .env.development.local in the repo root.",
+      });
+      return false;
+    }
+    return true;
+  }
+  if (!OLLAMA_BASE_URL) {
+    res.locals.auditError = "OLLAMA_BASE_URL is not set";
+    res.status(500).json({
+      message: isProduction
+        ? "Server configuration error"
+        : "OLLAMA_BASE_URL is not set. Add it to .env.development.local in the repo root.",
+    });
+    return false;
+  }
+  return true;
+}
+
+function createOpenAIClient() {
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
+
+async function ollamaChatNonStreaming({
+  model,
+  messages,
+  temperature = 0.7,
+  maxTokens = 2048,
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${OLLAMA_BASE_URL.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        stream: false,
+        options: { temperature, num_predict: maxTokens },
+        messages,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(`Ollama error ${resp.status}: ${body || resp.statusText}`);
+    }
+    const data = await resp.json();
+    return String(data?.message?.content ?? data?.response ?? "");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function* ollamaChatStreaming({
+  model,
+  messages,
+  temperature = 0.7,
+  maxTokens = 2048,
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${OLLAMA_BASE_URL.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        stream: true,
+        options: { temperature, num_predict: maxTokens },
+        messages,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(`Ollama error ${resp.status}: ${body || resp.statusText}`);
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      throw new Error("No Ollama response stream");
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let parsed;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+        const delta = String(parsed?.message?.content ?? parsed?.response ?? "");
+        if (delta) {
+          yield delta;
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
 const hasGoogleImageKeys =
@@ -302,6 +449,59 @@ app.use(auditV1Requests);
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "aimtutor-ai-backend" });
 });
+
+app.get(
+  "/v1/ai/ollama/models",
+  asyncRoute(async (req, res) => {
+    if (!requireDatabase(res)) {
+      return;
+    }
+    const auth = requireAuthApi(req, res);
+    if (!auth) {
+      return;
+    }
+    if (!requireAiProvider(res, "ollama")) {
+      return;
+    }
+    const localUserId = await upsertUserFromAuth(auth);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+      const resp = await fetch(
+        `${OLLAMA_BASE_URL.replace(/\/$/, "")}/api/tags`,
+        {
+          signal: controller.signal,
+        },
+      );
+      clearTimeout(timeout);
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`Ollama tags failed (${resp.status}): ${body}`);
+      }
+      const data = await resp.json();
+      const names = Array.isArray(data?.models)
+        ? data.models
+            .map((m) => String(m?.name ?? "").trim())
+            .filter(Boolean)
+            .slice(0, 128)
+        : [];
+      res.locals.auditDetails = {
+        kind: "ai_ollama_models",
+        provider: "ollama",
+        modelCount: names.length,
+      };
+      await logUsage({
+        userId: localUserId,
+        endpoint: "/v1/ai/ollama/models",
+        model: "ollama:tags",
+      });
+      res.json({ models: names });
+    } catch (err) {
+      res.locals.auditError = err?.message || "Failed to load ollama models";
+      res.status(500).json({ message: publicErrorMessage(err) });
+    }
+  }),
+);
 
 function requireApiKey(res) {
   if (!process.env.OPENAI_API_KEY) {
@@ -1755,9 +1955,6 @@ app.delete(
 app.post(
   "/v1/ai/text-to-diagram/chat-streaming",
   asyncRoute(async (req, res) => {
-    if (!requireApiKey(res)) {
-      return;
-    }
     if (!requireDatabase(res)) {
       return;
     }
@@ -1772,9 +1969,13 @@ app.post(
       res.status(400).json({ message: "body.messages must be an array" });
       return;
     }
+    const provider = parseAiProvider(req.body);
+    if (!requireAiProvider(res, provider)) {
+      return;
+    }
+    const model = parseAiModel(req.body, provider, MODEL);
     const localUserId = await upsertUserFromAuth(auth);
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = provider === "openai" ? createOpenAIClient() : null;
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -1789,39 +1990,69 @@ app.post(
     };
 
     try {
-      const stream = await openai.chat.completions.create({
-        model: MODEL,
-        stream: true,
-        messages: [
-          { role: "system", content: MERMAID_SYSTEM },
-          ...messages.map((m) => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: String(m.content ?? ""),
-          })),
-        ],
-      });
+      const normalizedMessages = [
+        { role: "system", content: MERMAID_SYSTEM },
+        ...messages.map((m) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: String(m.content ?? ""),
+        })),
+      ];
 
       let promptTokens = null;
       let completionTokens = null;
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content ?? "";
-        promptTokens = chunk?.usage?.prompt_tokens ?? promptTokens;
-        completionTokens = chunk?.usage?.completion_tokens ?? completionTokens;
-        if (delta) {
-          sendSse({ type: "content", delta });
+      let emittedContent = false;
+      if (provider === "ollama") {
+        for await (const delta of ollamaChatStreaming({
+          model,
+          messages: normalizedMessages,
+          maxTokens: 2048,
+          temperature: 0.7,
+        })) {
+          if (delta) {
+            sendSse({ type: "content", delta });
+            emittedContent = true;
+          }
+        }
+        if (!emittedContent) {
+          const fallbackText = await ollamaChatNonStreaming({
+            model,
+            messages: normalizedMessages,
+            maxTokens: 2048,
+            temperature: 0.7,
+          });
+          if (fallbackText) {
+            sendSse({ type: "content", delta: fallbackText });
+            emittedContent = true;
+          }
+        }
+      } else {
+        const stream = await openai.chat.completions.create({
+          model,
+          stream: true,
+          messages: normalizedMessages,
+        });
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          promptTokens = chunk?.usage?.prompt_tokens ?? promptTokens;
+          completionTokens = chunk?.usage?.completion_tokens ?? completionTokens;
+          if (delta) {
+            sendSse({ type: "content", delta });
+            emittedContent = true;
+          }
         }
       }
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/text-to-diagram/chat-streaming",
-        model: MODEL,
+        model,
         promptTokens,
         completionTokens,
       });
 
       res.locals.auditDetails = {
         kind: "ai_text_to_diagram_stream",
-        model: MODEL,
+        provider,
+        model,
         promptTokens,
         completionTokens,
         messageCount: messages.length,
@@ -1835,7 +2066,8 @@ app.post(
       res.locals.auditError = internal;
       res.locals.auditDetails = {
         kind: "ai_text_to_diagram_stream",
-        model: MODEL,
+        provider,
+        model,
         failed: true,
       };
       sendSse({
@@ -1952,23 +2184,37 @@ const SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES = 10;
 const SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES = 4;
 
 /**
- * OpenAI query expansion + Serp/Google image fetch.
+ * LLM query expansion + Serp/Google image fetch.
  * Streaming route runs this in parallel with the assistant text stream; SSE `images` is sent when this resolves.
  * @returns {Promise<{ items: any[]; expansionUsage: { prompt_tokens: number; completion_tokens: number } | null }>}
  */
-async function runSidebarImagePipeline(openai, trimmed, maxReferenceImages = 4) {
+async function runSidebarImagePipeline({
+  provider,
+  openai,
+  model,
+  trimmed,
+  maxReferenceImages = 4,
+}) {
   if (!hasSidebarImageSearchCredentials()) {
     return { items: [], expansionUsage: null };
   }
   const topicSeed = fallbackImageSearchQuery(trimmed);
-  const imageQueryModel =
-    process.env.OPENAI_IMAGE_QUERY_MODEL?.trim() || MODEL;
-  const { queries, usage: expansionUsage } =
-    await expandImageSearchQueriesOpenAI(
+  const imageQueryModel = model || process.env.OPENAI_IMAGE_QUERY_MODEL?.trim() || MODEL;
+  let expansionResult;
+  if (provider === "ollama") {
+    expansionResult = await expandImageSearchQueriesOllama(
+      OLLAMA_BASE_URL,
+      { trimmed, topicSeed },
+      imageQueryModel,
+    );
+  } else {
+    expansionResult = await expandImageSearchQueriesOpenAI(
       openai,
       { trimmed, topicSeed },
       imageQueryModel,
     );
+  }
+  const { queries, usage: expansionUsage } = expansionResult;
   try {
     const { items } = await fetchImagesWithMetaFromQueries(
       queries,
@@ -1990,9 +2236,6 @@ async function runSidebarImagePipeline(openai, trimmed, maxReferenceImages = 4) 
 app.post(
   "/v1/ai/sidebar-chat-streaming",
   asyncRoute(async (req, res) => {
-    if (!requireApiKey(res)) {
-      return;
-    }
     if (!requireDatabase(res)) {
       return;
     }
@@ -2025,7 +2268,12 @@ app.post(
       return;
     }
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const provider = parseAiProvider(req.body);
+    if (!requireAiProvider(res, provider)) {
+      return;
+    }
+    const model = parseAiModel(req.body, provider, MODEL);
+    const openai = provider === "openai" ? createOpenAIClient() : null;
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -2043,13 +2291,16 @@ app.post(
     try {
       let promptTokens = null;
       let completionTokens = null;
+      let emittedContent = false;
 
       if (mode === "images") {
-        const { items, expansionUsage } = await runSidebarImagePipeline(
+        const { items, expansionUsage } = await runSidebarImagePipeline({
+          provider,
           openai,
+          model,
           trimmed,
-          SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
-        );
+          maxReferenceImages: SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
+        });
         if (items.length > 0 && !res.writableEnded) {
           sendSse({ type: "images", images: items });
         }
@@ -2060,13 +2311,14 @@ app.post(
         await logUsage({
           userId: localUserId,
           endpoint: "/v1/ai/sidebar-chat-streaming",
-          model: MODEL,
+          model,
           promptTokens,
           completionTokens,
         });
         res.locals.auditDetails = {
           kind: "ai_sidebar_chat_stream",
-          model: MODEL,
+          provider,
+          model,
           messageCount: trimmed.length,
           mode,
           promptTokens,
@@ -2083,11 +2335,13 @@ app.post(
       /** Image pipeline only in topic_plus_images mode; SSE thumbnails when ready. */
       const imageJob =
         mode === "topic_plus_images"
-          ? runSidebarImagePipeline(
+          ? runSidebarImagePipeline({
+              provider,
               openai,
+              model,
               trimmed,
-              SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
-            )
+              maxReferenceImages: SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
+            })
               .then(({ items, expansionUsage }) => {
                 if (items.length > 0 && !res.writableEnded) {
                   sendSse({ type: "images", images: items });
@@ -2103,25 +2357,52 @@ app.post(
               })
           : Promise.resolve({ expansionUsage: null });
 
-      const stream = await openai.chat.completions.create({
-        model: MODEL,
-        stream: true,
-        messages: openaiMessages,
-        max_tokens: 2048,
-        temperature: 0.7,
-        stream_options: { include_usage: true },
-      });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content ?? "";
-        if (chunk.usage) {
-          promptTokens =
-            (promptTokens ?? 0) + (chunk.usage.prompt_tokens ?? 0);
-          completionTokens =
-            (completionTokens ?? 0) + (chunk.usage.completion_tokens ?? 0);
+      if (provider === "ollama") {
+        for await (const delta of ollamaChatStreaming({
+          model,
+          messages: openaiMessages,
+          maxTokens: 2048,
+          temperature: 0.7,
+        })) {
+          if (delta) {
+            sendSse({ type: "content", delta });
+            emittedContent = true;
+          }
         }
-        if (delta) {
-          sendSse({ type: "content", delta });
+        if (!emittedContent) {
+          const fallbackText = await ollamaChatNonStreaming({
+            model,
+            messages: openaiMessages,
+            maxTokens: 2048,
+            temperature: 0.7,
+          });
+          if (fallbackText) {
+            sendSse({ type: "content", delta: fallbackText });
+            emittedContent = true;
+          }
+        }
+      } else {
+        const stream = await openai.chat.completions.create({
+          model,
+          stream: true,
+          messages: openaiMessages,
+          max_tokens: 2048,
+          temperature: 0.7,
+          stream_options: { include_usage: true },
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (chunk.usage) {
+            promptTokens =
+              (promptTokens ?? 0) + (chunk.usage.prompt_tokens ?? 0);
+            completionTokens =
+              (completionTokens ?? 0) + (chunk.usage.completion_tokens ?? 0);
+          }
+          if (delta) {
+            sendSse({ type: "content", delta });
+            emittedContent = true;
+          }
         }
       }
 
@@ -2137,13 +2418,14 @@ app.post(
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/sidebar-chat-streaming",
-        model: MODEL,
+        model,
         promptTokens,
         completionTokens,
       });
       res.locals.auditDetails = {
         kind: "ai_sidebar_chat_stream",
-        model: MODEL,
+        provider,
+        model,
         messageCount: trimmed.length,
         mode,
         promptTokens,
@@ -2156,7 +2438,8 @@ app.post(
       res.locals.auditError = err?.message || "sidebar chat stream failed";
       res.locals.auditDetails = {
         kind: "ai_sidebar_chat_stream",
-        model: MODEL,
+        provider,
+        model,
         failed: true,
       };
       sendSse({
@@ -2174,9 +2457,6 @@ app.post(
 app.post(
   "/v1/ai/sidebar-chat",
   asyncRoute(async (req, res) => {
-    if (!requireApiKey(res)) {
-      return;
-    }
     if (!requireDatabase(res)) {
       return;
     }
@@ -2209,15 +2489,22 @@ app.post(
       return;
     }
 
+    const provider = parseAiProvider(req.body);
+    if (!requireAiProvider(res, provider)) {
+      return;
+    }
+    const model = parseAiModel(req.body, provider, MODEL);
     const mode = parseSidebarChatMode(req.body);
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = provider === "openai" ? createOpenAIClient() : null;
     try {
       if (mode === "images") {
-        const pipelineResult = await runSidebarImagePipeline(
+        const pipelineResult = await runSidebarImagePipeline({
+          provider,
           openai,
+          model,
           trimmed,
-          SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
-        );
+          maxReferenceImages: SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
+        });
         const images = pipelineResult.items;
         let promptTokens = pipelineResult.expansionUsage
           ? pipelineResult.expansionUsage.prompt_tokens
@@ -2228,13 +2515,14 @@ app.post(
         await logUsage({
           userId: localUserId,
           endpoint: "/v1/ai/sidebar-chat",
-          model: MODEL,
+          model,
           promptTokens,
           completionTokens,
         });
         res.locals.auditDetails = {
           kind: "ai_sidebar_chat",
-          model: MODEL,
+          provider,
+          model,
           messageCount: trimmed.length,
           mode,
         };
@@ -2245,20 +2533,29 @@ app.post(
       const openaiMessages = buildSidebarOpenAIMessages(trimmed, mode);
       const runPipeline =
         mode === "topic_plus_images"
-          ? runSidebarImagePipeline(
+          ? runSidebarImagePipeline({
+              provider,
               openai,
+              model,
               trimmed,
-              SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
-            )
+              maxReferenceImages: SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
+            })
           : Promise.resolve({ items: [], expansionUsage: null });
-      const [pipelineResult, completion] = await Promise.all([
+      const [pipelineResult, completionTextOrObj] = await Promise.all([
         runPipeline,
-        openai.chat.completions.create({
-          model: MODEL,
-          messages: openaiMessages,
-          max_tokens: 2048,
-          temperature: 0.7,
-        }),
+        provider === "ollama"
+          ? ollamaChatNonStreaming({
+              model,
+              messages: openaiMessages,
+              maxTokens: 2048,
+              temperature: 0.7,
+            })
+          : openai.chat.completions.create({
+              model,
+              messages: openaiMessages,
+              max_tokens: 2048,
+              temperature: 0.7,
+            }),
       ]);
       const images = pipelineResult.items;
       let promptTokens = pipelineResult.expansionUsage
@@ -2268,8 +2565,12 @@ app.post(
         ? pipelineResult.expansionUsage.completion_tokens
         : null;
 
-      const reply = completion.choices[0]?.message?.content?.trim() ?? "";
-      const u2 = completion.usage;
+      const reply =
+        provider === "ollama"
+          ? String(completionTextOrObj ?? "").trim()
+          : completionTextOrObj.choices[0]?.message?.content?.trim() ?? "";
+      const u2 =
+        provider === "openai" ? completionTextOrObj.usage : null;
       if (u2) {
         promptTokens = (promptTokens ?? 0) + (u2.prompt_tokens ?? 0);
         completionTokens = (completionTokens ?? 0) + (u2.completion_tokens ?? 0);
@@ -2278,13 +2579,14 @@ app.post(
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/sidebar-chat",
-        model: MODEL,
+        model,
         promptTokens,
         completionTokens,
       });
       res.locals.auditDetails = {
         kind: "ai_sidebar_chat",
-        model: MODEL,
+        provider,
+        model,
         messageCount: trimmed.length,
         mode,
       };
@@ -2299,9 +2601,6 @@ app.post(
 app.post(
   "/v1/ai/diagram-to-code/generate",
   asyncRoute(async (req, res) => {
-    if (!requireApiKey(res)) {
-      return;
-    }
     if (!requireDatabase(res)) {
       return;
     }
@@ -2309,6 +2608,18 @@ app.post(
     if (!auth) {
       return;
     }
+    const provider = parseAiProvider(req.body);
+    if (!requireAiProvider(res, provider)) {
+      return;
+    }
+    if (provider === "ollama") {
+      res.status(400).json({
+        message:
+          "diagram-to-code image inference currently requires OpenAI vision. Switch provider to OpenAI for this action.",
+      });
+      return;
+    }
+    const model = parseAiModel(req.body, provider, VISION_MODEL);
     const localUserId = await upsertUserFromAuth(auth);
 
     const { texts, image, theme, canvasContext } = req.body ?? {};
@@ -2335,7 +2646,7 @@ app.post(
       return;
     }
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = createOpenAIClient();
 
     const system =
       "You generate a single self-contained HTML document (only HTML, no markdown) that implements the UI or diagram described. Use inline CSS. Theme hint: " +
@@ -2343,7 +2654,7 @@ app.post(
 
     try {
       const completion = await openai.chat.completions.create({
-        model: VISION_MODEL,
+        model,
         messages: [
           { role: "system", content: system },
           {
@@ -2375,13 +2686,14 @@ app.post(
       await logUsage({
         userId: localUserId,
         endpoint: "/v1/ai/diagram-to-code/generate",
-        model: VISION_MODEL,
+        model,
         promptTokens: completion.usage?.prompt_tokens ?? null,
         completionTokens: completion.usage?.completion_tokens ?? null,
       });
       res.locals.auditDetails = {
         kind: "ai_diagram_to_code",
-        model: VISION_MODEL,
+        provider,
+        model,
         promptTokens: completion.usage?.prompt_tokens ?? null,
         completionTokens: completion.usage?.completion_tokens ?? null,
         theme: theme ?? null,
@@ -2393,7 +2705,8 @@ app.post(
       res.locals.auditError = err?.message || "diagram-to-code failed";
       res.locals.auditDetails = {
         kind: "ai_diagram_to_code",
-        model: VISION_MODEL,
+        provider,
+        model,
         failed: true,
       };
       res.status(500).json({
@@ -2452,6 +2765,7 @@ ensureSchema()
             "POST   /v1/boards/:boardId/ai-chats",
             "PUT    /v1/boards/:boardId/ai-chats/:sessionId",
             "DELETE /v1/boards/:boardId/ai-chats/:sessionId",
+            "GET    /v1/ai/ollama/models",
             "POST   /v1/ai/text-to-diagram/chat-streaming",
             "POST   /v1/ai/sidebar-chat-streaming",
             "POST   /v1/ai/sidebar-chat",

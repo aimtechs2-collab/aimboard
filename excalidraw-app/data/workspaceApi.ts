@@ -303,12 +303,17 @@ export function sidebarMessagesForApi(
 
 /** Sidebar assistant behavior; must match ai-backend `parseSidebarChatMode`. */
 export type SidebarChatMode = "topic_plus_images" | "images" | "chat";
+export type AiProvider = "openai" | "ollama";
 
 /** OpenAI-backed chat; key stays on ai-backend (OPENAI_API_KEY). Requires Clerk JWT. */
 export async function postSidebarChat(
   getToken: () => Promise<string | null>,
   messages: SidebarChatMessage[],
   mode: SidebarChatMode = "topic_plus_images",
+  options?: {
+    provider?: AiProvider;
+    model?: string;
+  },
 ): Promise<{ text: string; images: SidebarChatImage[] }> {
   const base = getWorkspaceApiBase();
   if (!base) {
@@ -317,7 +322,12 @@ export async function postSidebarChat(
   const res = await fetch(`${base}/v1/ai/sidebar-chat`, {
     method: "POST",
     headers: await headersJson(getToken),
-    body: JSON.stringify({ messages, mode }),
+    body: JSON.stringify({
+      messages,
+      mode,
+      provider: options?.provider,
+      model: options?.model,
+    }),
   });
   const data = await parseJson<{
     text?: string;
@@ -334,6 +344,8 @@ export async function postSidebarChatStream(
   messages: SidebarChatMessage[],
   options?: {
     mode?: SidebarChatMode;
+    provider?: AiProvider;
+    model?: string;
     onChunk?: (chunk: string) => void;
     onImages?: (images: SidebarChatImage[]) => void;
     signal?: AbortSignal;
@@ -357,6 +369,8 @@ export async function postSidebarChatStream(
     body: JSON.stringify({
       messages,
       mode: options?.mode ?? "topic_plus_images",
+      provider: options?.provider,
+      model: options?.model,
     }),
     signal: options?.signal,
   });
@@ -476,6 +490,20 @@ export async function postSidebarChatStream(
   }
   flushAllPendingChunks();
   return { text: fullResponse, images: streamImages };
+}
+
+export async function fetchOllamaModels(
+  getToken: () => Promise<string | null>,
+): Promise<string[]> {
+  const base = getWorkspaceApiBase();
+  if (!base) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured");
+  }
+  const res = await fetch(`${base}/v1/ai/ollama/models`, {
+    headers: await headersJson(getToken),
+  });
+  const data = await parseJson<{ models?: string[] }>(res);
+  return Array.isArray(data.models) ? data.models.filter(Boolean) : [];
 }
 
 export type BoardAiChatSessionSummary = {

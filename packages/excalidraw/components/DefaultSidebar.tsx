@@ -16,7 +16,6 @@ import "../components/dropdownMenu/DropdownMenu.scss";
 import { useExcalidrawSetAppState } from "./App";
 import { Sidebar } from "./Sidebar/Sidebar";
 import { withInternalFallback } from "./hoc/withInternalFallback";
-import { messageCircleIcon } from "./icons";
 
 import type { SidebarProps, SidebarTriggerProps } from "./Sidebar/common";
 
@@ -69,8 +68,7 @@ export const DefaultSidebar = Object.assign(
       const appState = useUIAppState();
       const setAppState = useExcalidrawSetAppState();
 
-      const { DefaultSidebarTabTriggersTunnel, AiChatSidebarTunnel } =
-        useTunnels();
+      const { AiChatSidebarTunnel } = useTunnels();
 
       return (
         <Sidebar
@@ -89,15 +87,7 @@ export const DefaultSidebar = Object.assign(
         >
           <Sidebar.Tabs>
             <Sidebar.Header>
-              <Sidebar.TabTriggers>
-                <Sidebar.TabTrigger
-                  tab={AIMTUTOR_AI_CHAT_TAB}
-                  title="AI assistant"
-                >
-                  {messageCircleIcon}
-                </Sidebar.TabTrigger>
-                <DefaultSidebarTabTriggersTunnel.Out />
-              </Sidebar.TabTriggers>
+              {null}
             </Sidebar.Header>
             <Sidebar.Tab tab={AIMTUTOR_AI_CHAT_TAB}>
               <AiChatSidebarTunnel.Out />
