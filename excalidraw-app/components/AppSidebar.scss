@@ -2,7 +2,65 @@
   .sidebar__header .aim-ai-sidebar-header-actions {
     display: flex;
     align-items: center;
-    gap: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    max-width: 100%;
+  }
+
+  .aim-ai-chat-mode-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.1rem;
+    margin-right: 0.15rem;
+    min-width: 0;
+  }
+
+  .aim-ai-chat-mode-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-gray-50, #6b7280);
+    line-height: 1;
+    padding-left: 0.05rem;
+  }
+
+  .aim-ai-chat-mode-select {
+    appearance: none;
+    max-width: 9.5rem;
+    padding: 0.28rem 1.35rem 0.28rem 0.45rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: inherit;
+    line-height: 1.25;
+    border-radius: 6px;
+    border: 1px solid var(--sidebar-border-color, rgba(0, 0, 0, 0.12));
+    background: var(--input-bg-color, #fff);
+    color: var(--text-primary-color, #111827);
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.35rem center;
+    background-size: 10px;
+  }
+
+  .aim-ai-chat-mode-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .aim-ai-chat-mode-select:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-primary, #6965db) 50%, transparent);
+    outline-offset: 1px;
+  }
+
+  .aim-ai-chat__images-only-hint {
+    margin: 0 0 0.35rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--color-muted-darker, #7a7a7a);
   }
 
   .sidebar__header .aim-ai-new-chat svg,

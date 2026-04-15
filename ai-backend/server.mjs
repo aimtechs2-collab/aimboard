@@ -62,13 +62,137 @@ Choose an appropriate diagram type (flowchart, sequenceDiagram, classDiagram, st
 Keep syntax compatible with Mermaid 10+.`;
 
 const { Pool } = pg;
+
+/** Neon / managed Postgres often require TLS even when the URL omits sslmode=require. */
+function resolvePgSsl(connectionString) {
+  if (!connectionString || typeof connectionString !== "string") {
+    return undefined;
+  }
+  if (process.env.DATABASE_SSL === "0") {
+    return undefined;
+  }
+  if (process.env.DATABASE_SSL === "1") {
+    return { rejectUnauthorized: false };
+  }
+  if (
+    /[?&]sslmode=require\b/i.test(connectionString) ||
+    /[?&]sslmode=verify-full\b/i.test(connectionString)
+  ) {
+    return { rejectUnauthorized: false };
+  }
+  try {
+    const normalized = connectionString.replace(/^postgres(ql)?:/i, "https:");
+    const host = new URL(normalized).hostname?.toLowerCase() ?? "";
+    if (
+      host.endsWith(".neon.tech") ||
+      host.endsWith(".pooler.supabase.com") ||
+      host.endsWith(".supabase.co") ||
+      host.includes("aivencloud.com") ||
+      host.endsWith(".render.com")
+    ) {
+      return { rejectUnauthorized: false };
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return undefined;
+}
+
+function isTransientPgError(err) {
+  if (!err) return false;
+  const msg = (typeof err.message === "string" ? err.message : "").toLowerCase();
+  if (
+    msg.includes("connection terminated unexpectedly") ||
+    msg.includes("connection terminated due to connection timeout") ||
+    msg.includes("connection timeout") ||
+    msg.includes("server closed the connection") ||
+    msg.includes("econnreset") ||
+    msg.includes("read etimedout")
+  ) {
+    return true;
+  }
+  if (
+    err.code === "ECONNRESET" ||
+    err.code === "ETIMEDOUT" ||
+    err.code === "EPIPE"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Neon console URLs often include channel_binding=require; node-pg can fail or drop
+ * mid-handshake. Pooler TLS works without it.
+ */
+function stripChannelBindingFromConnectionString(cs) {
+  if (!cs || typeof cs !== "string" || !cs.includes("channel_binding")) {
+    return cs;
+  }
+  const qIdx = cs.indexOf("?");
+  if (qIdx === -1) {
+    return cs;
+  }
+  const base = cs.slice(0, qIdx);
+  const tail = cs.slice(qIdx + 1);
+  const parts = tail.split("&").filter((p) => !/^channel_binding=/i.test(p.trim()));
+  return parts.length > 0 ? `${base}?${parts.join("&")}` : base;
+}
+
+/** Neon free tier suspends compute; first connection after idle can take 30–90s+. */
+function resolveConnectionTimeoutMillis() {
+  const fromEnv = process.env.PG_CONNECTION_TIMEOUT_MS;
+  if (fromEnv != null && fromEnv !== "") {
+    const n = parseInt(fromEnv, 10);
+    if (Number.isFinite(n) && n >= 1000) {
+      return n;
+    }
+  }
+  const cs = process.env.NEON_DATABASE_URL ?? "";
+  return /\.neon\.tech/i.test(cs) ? 120_000 : 15_000;
+}
+
+const pgConnectionString = stripChannelBindingFromConnectionString(
+  process.env.NEON_DATABASE_URL,
+);
+
 const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL,
-  ssl:
-    process.env.NEON_DATABASE_URL?.includes("sslmode=require") === true
-      ? { rejectUnauthorized: false }
-      : undefined,
+  connectionString: pgConnectionString,
+  ssl: resolvePgSsl(process.env.NEON_DATABASE_URL),
+  max: 5,
+  idleTimeoutMillis: 20_000,
+  connectionTimeoutMillis: resolveConnectionTimeoutMillis(),
 });
+
+pool.on("error", (err) => {
+  logger.error(
+    { err, module: "pgPool" },
+    "Unexpected error on idle PostgreSQL client",
+  );
+});
+
+async function pgQuery(text, params) {
+  let lastErr;
+  const maxAttempts = /\.neon\.tech/i.test(process.env.NEON_DATABASE_URL ?? "")
+    ? 3
+    : 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await pool.query(text, params);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts - 1 && isTransientPgError(err)) {
+        logger.warn(
+          { err, attempt, module: "pgQuery" },
+          "retrying postgres query after transient error",
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
 
 function normalizeCorsOrigin(value) {
   if (typeof value !== "string") {
@@ -758,7 +882,7 @@ async function upsertUserFromAuth(auth) {
     name = await fetchClerkUserName(auth.userId);
   }
 
-  const { rows } = await pool.query(
+  const { rows } = await pgQuery(
     `
       INSERT INTO users (clerk_user_id, email, name, avatar_url, updated_at)
       VALUES ($1, $2, $3, $4, NOW())
@@ -1761,10 +1885,31 @@ In your reply:
 - Assume relevant reference images **will appear** beside the message; tie your explanation to **visual teaching** when it helps (diagrams, setups, examples).
 - Do **not** include Markdown images (\`![alt](url)\`), raw image URLs, numbered link lists, or JSON. You may briefly mention what the gallery illustrates (e.g. “see the vector diagrams in the references”).`;
 
+const SIDEBAR_CHAT_SYSTEM_CHAT = `You are AimTutor's teaching assistant in a sidebar chat beside a collaborative whiteboard.
+
+The user is a **tutor or teacher**. Earlier messages in this thread may contain a structured **roadmap** (Scope, teachable units, sequence, hooks). Your job in this **chat** mode is to **continue that conversation**: clarify units, deepen subtopics, suggest whiteboard activities, address misconceptions, reorder emphasis, answer follow-up questions, or connect to the next lesson.
+
+## Rules
+- **Do not** restart from scratch with a full new roadmap unless the user clearly asks for a fresh plan for a **new** subject or unit.
+- Use **Markdown** when helpful (short headings, bullets). Be concise unless the user asks for depth.
+- This mode does **not** attach automatic reference thumbnails. Do **not** rely on images, and do **not** output Markdown images (\`![alt](url)\`), raw image URLs, or image JSON.
+- Stay grounded in what was already said in the thread; ask one clarifying question if needed.`;
+
+/** @returns {"topic_plus_images" | "images" | "chat"} */
+function parseSidebarChatMode(body) {
+  const raw = typeof body?.mode === "string" ? body.mode.trim() : "";
+  if (raw === "images" || raw === "chat" || raw === "topic_plus_images") {
+    return raw;
+  }
+  return "topic_plus_images";
+}
+
 /** OpenAI messages for sidebar chat (system + trimmed history). */
-function buildSidebarOpenAIMessages(trimmed) {
+function buildSidebarOpenAIMessages(trimmed, mode) {
+  const system =
+    mode === "chat" ? SIDEBAR_CHAT_SYSTEM_CHAT : SIDEBAR_CHAT_SYSTEM;
   return [
-    { role: "system", content: SIDEBAR_CHAT_SYSTEM },
+    { role: "system", content: system },
     ...trimmed.map((m) => ({ role: m.role, content: m.content })),
   ];
 }
@@ -1803,12 +1948,15 @@ function fallbackImageSearchQuery(trimmed) {
   return (last || "teaching reference").slice(0, 200);
 }
 
+const SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES = 10;
+const SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES = 4;
+
 /**
  * OpenAI query expansion + Serp/Google image fetch.
  * Streaming route runs this in parallel with the assistant text stream; SSE `images` is sent when this resolves.
  * @returns {Promise<{ items: any[]; expansionUsage: { prompt_tokens: number; completion_tokens: number } | null }>}
  */
-async function runSidebarImagePipeline(openai, trimmed) {
+async function runSidebarImagePipeline(openai, trimmed, maxReferenceImages = 4) {
   if (!hasSidebarImageSearchCredentials()) {
     return { items: [], expansionUsage: null };
   }
@@ -1822,7 +1970,10 @@ async function runSidebarImagePipeline(openai, trimmed) {
       imageQueryModel,
     );
   try {
-    const { items } = await fetchImagesWithMetaFromQueries(queries, 4);
+    const { items } = await fetchImagesWithMetaFromQueries(
+      queries,
+      maxReferenceImages,
+    );
     return {
       items: Array.isArray(items) ? items : [],
       expansionUsage,
@@ -1887,26 +2038,70 @@ app.post(
       res.write(`data: ${JSON.stringify(obj)}\n\n`);
     };
 
+    const mode = parseSidebarChatMode(req.body);
+
     try {
-      const openaiMessages = buildSidebarOpenAIMessages(trimmed);
       let promptTokens = null;
       let completionTokens = null;
 
-      /** Image expansion + fetch runs in parallel with assistant streaming; thumbnails SSE when ready. */
-      const imageJob = runSidebarImagePipeline(openai, trimmed)
-        .then(({ items, expansionUsage }) => {
-          if (items.length > 0 && !res.writableEnded) {
-            sendSse({ type: "images", images: items });
-          }
-          return { expansionUsage };
-        })
-        .catch((err) => {
-          logger.debug(
-            { err, module: "sidebarChat" },
-            "sidebar image job failed",
-          );
-          return { expansionUsage: null };
+      if (mode === "images") {
+        const { items, expansionUsage } = await runSidebarImagePipeline(
+          openai,
+          trimmed,
+          SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
+        );
+        if (items.length > 0 && !res.writableEnded) {
+          sendSse({ type: "images", images: items });
+        }
+        if (expansionUsage) {
+          promptTokens = expansionUsage.prompt_tokens ?? null;
+          completionTokens = expansionUsage.completion_tokens ?? null;
+        }
+        await logUsage({
+          userId: localUserId,
+          endpoint: "/v1/ai/sidebar-chat-streaming",
+          model: MODEL,
+          promptTokens,
+          completionTokens,
         });
+        res.locals.auditDetails = {
+          kind: "ai_sidebar_chat_stream",
+          model: MODEL,
+          messageCount: trimmed.length,
+          mode,
+          promptTokens,
+          completionTokens,
+        };
+        sendSse({ type: "done", finishReason: "stop" });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+
+      const openaiMessages = buildSidebarOpenAIMessages(trimmed, mode);
+
+      /** Image pipeline only in topic_plus_images mode; SSE thumbnails when ready. */
+      const imageJob =
+        mode === "topic_plus_images"
+          ? runSidebarImagePipeline(
+              openai,
+              trimmed,
+              SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
+            )
+              .then(({ items, expansionUsage }) => {
+                if (items.length > 0 && !res.writableEnded) {
+                  sendSse({ type: "images", images: items });
+                }
+                return { expansionUsage };
+              })
+              .catch((err) => {
+                logger.debug(
+                  { err, module: "sidebarChat" },
+                  "sidebar image job failed",
+                );
+                return { expansionUsage: null };
+              })
+          : Promise.resolve({ expansionUsage: null });
 
       const stream = await openai.chat.completions.create({
         model: MODEL,
@@ -1950,6 +2145,7 @@ app.post(
         kind: "ai_sidebar_chat_stream",
         model: MODEL,
         messageCount: trimmed.length,
+        mode,
         promptTokens,
         completionTokens,
       };
@@ -2013,11 +2209,50 @@ app.post(
       return;
     }
 
+    const mode = parseSidebarChatMode(req.body);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     try {
-      const openaiMessages = buildSidebarOpenAIMessages(trimmed);
+      if (mode === "images") {
+        const pipelineResult = await runSidebarImagePipeline(
+          openai,
+          trimmed,
+          SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
+        );
+        const images = pipelineResult.items;
+        let promptTokens = pipelineResult.expansionUsage
+          ? pipelineResult.expansionUsage.prompt_tokens
+          : null;
+        let completionTokens = pipelineResult.expansionUsage
+          ? pipelineResult.expansionUsage.completion_tokens
+          : null;
+        await logUsage({
+          userId: localUserId,
+          endpoint: "/v1/ai/sidebar-chat",
+          model: MODEL,
+          promptTokens,
+          completionTokens,
+        });
+        res.locals.auditDetails = {
+          kind: "ai_sidebar_chat",
+          model: MODEL,
+          messageCount: trimmed.length,
+          mode,
+        };
+        res.json({ text: "", images, reply: "" });
+        return;
+      }
+
+      const openaiMessages = buildSidebarOpenAIMessages(trimmed, mode);
+      const runPipeline =
+        mode === "topic_plus_images"
+          ? runSidebarImagePipeline(
+              openai,
+              trimmed,
+              SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
+            )
+          : Promise.resolve({ items: [], expansionUsage: null });
       const [pipelineResult, completion] = await Promise.all([
-        runSidebarImagePipeline(openai, trimmed),
+        runPipeline,
         openai.chat.completions.create({
           model: MODEL,
           messages: openaiMessages,
@@ -2051,6 +2286,7 @@ app.post(
         kind: "ai_sidebar_chat",
         model: MODEL,
         messageCount: trimmed.length,
+        mode,
       };
       res.json({ text: reply, images, reply });
     } catch (err) {

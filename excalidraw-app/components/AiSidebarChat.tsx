@@ -42,9 +42,11 @@ import {
   listBoardAiChats,
   postSidebarChatStream,
   putBoardAiChatSession,
+  sidebarMessagesForApi,
   type BoardAiChatSessionSummary,
   type SidebarChatImage,
   type SidebarChatMessage,
+  type SidebarChatMode,
 } from "../data/workspaceApi";
 
 import "./AppSidebar.scss";
@@ -56,6 +58,23 @@ const SIDEBAR_CONTEXT_STORE_CAP = 120;
 const SIDEBAR_MIN_WIDTH = 280;
 const SIDEBAR_MAX_WIDTH = 560;
 const CHAT_HISTORY_MAX = 40;
+const SIDEBAR_MODE_STORAGE_KEY = "aim-sidebar-chat-mode";
+/** Shown reference thumbnails: Images mode fetches more from the API. */
+const SIDEBAR_IMAGE_GRID_CAP_TOPIC = 4;
+const SIDEBAR_IMAGE_GRID_CAP_IMAGES_ONLY = 10;
+
+function readStoredSidebarMode(): SidebarChatMode {
+  try {
+    const v = localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY);
+    if (v === "images" || v === "chat" || v === "topic_plus_images") {
+      return v;
+    }
+  } catch {
+    /* ignore */
+  }
+  return "topic_plus_images";
+}
+
 /** Drag reference thumbnails onto the canvas; must match App.tsx AIMBOARD_CHAT_IMAGE_DRAG_MIME. */
 const AIMBOARD_CHAT_IMAGE_DRAG_MIME = "application/x-aimboard-chat-image";
 
@@ -621,6 +640,8 @@ type AiSidebarChatContextValue = {
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   chatRootRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
+  sidebarChatMode: SidebarChatMode;
+  setSidebarChatMode: React.Dispatch<React.SetStateAction<SidebarChatMode>>;
 };
 
 const AiSidebarChatContext =
@@ -649,6 +670,9 @@ export const AiSidebarChatProvider: React.FC<{
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarChatMode, setSidebarChatMode] = useState<SidebarChatMode>(
+    readStoredSidebarMode,
+  );
   const listRef = useRef<HTMLDivElement>(null);
   const chatRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<SidebarChatMessage[]>([]);
@@ -663,6 +687,14 @@ export const AiSidebarChatProvider: React.FC<{
   messagesRef.current = messages;
   contextMessagesRef.current = contextMessages;
   activeSessionIdRef.current = activeSessionId;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_MODE_STORAGE_KEY, sidebarChatMode);
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarChatMode]);
 
   const refreshServerSessions = useCallback(async () => {
     if (!boardId) {
@@ -992,10 +1024,11 @@ export const AiSidebarChatProvider: React.FC<{
       ...mergedBeforeUser,
       { role: "user", content: text },
     ];
-    const trimmedForApi =
+    const mergedForApi =
       nextForApi.length > SIDEBAR_CHAT_MERGE_CAP
         ? nextForApi.slice(-SIDEBAR_CHAT_MERGE_CAP)
         : nextForApi;
+    const trimmedForApi = sidebarMessagesForApi(mergedForApi);
 
     const sessionWithUser: SidebarChatMessage[] = [
       ...sessionPrior,
@@ -1008,6 +1041,7 @@ export const AiSidebarChatProvider: React.FC<{
     try {
       const { text: replyText, images: replyImages } =
         await postSidebarChatStream(getTokenRef.current, trimmedForApi, {
+          mode: sidebarChatMode,
           onChunk: (chunk) => {
             setMessages((prev) => {
               const next = [...prev];
@@ -1041,7 +1075,6 @@ export const AiSidebarChatProvider: React.FC<{
         });
       const persistId = activeSessionIdRef.current;
       const fallback = "I could not generate a response. Please try again.";
-      const assistantBody = replyText.trim() ? replyText : fallback;
       const lastLive = messagesRef.current[messagesRef.current.length - 1];
       const imagesForFinal =
         replyImages.length > 0
@@ -1051,6 +1084,16 @@ export const AiSidebarChatProvider: React.FC<{
             : lastLive?.role === "assistant" && lastLive.images?.length
               ? lastLive.images
               : [];
+      const trimmedReply = replyText.trim();
+      const assistantBody =
+        trimmedReply ||
+        (sidebarChatMode === "images" && imagesForFinal.length > 0
+          ? ""
+          : fallback);
+      const imagesOnlyAssistant =
+        sidebarChatMode === "images" &&
+        !assistantBody.trim() &&
+        imagesForFinal.length > 0;
       const finalThread: SidebarChatMessage[] = [
         ...sessionPrior,
         { role: "user", content: text },
@@ -1058,6 +1101,7 @@ export const AiSidebarChatProvider: React.FC<{
           role: "assistant",
           content: assistantBody,
           ...(imagesForFinal.length ? { images: imagesForFinal } : {}),
+          ...(imagesOnlyAssistant ? { imagesOnly: true } : {}),
         },
       ];
       setMessages(finalThread);
@@ -1072,7 +1116,15 @@ export const AiSidebarChatProvider: React.FC<{
     } finally {
       setLoading(false);
     }
-  }, [input, loading, isSignedIn, boardId, persistBoardSession, refreshServerSessions]);
+  }, [
+    input,
+    loading,
+    isSignedIn,
+    boardId,
+    persistBoardSession,
+    refreshServerSessions,
+    sidebarChatMode,
+  ]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1322,6 +1374,8 @@ export const AiSidebarChatProvider: React.FC<{
     onResizeStart,
     chatRootRef,
     listRef,
+    sidebarChatMode,
+    setSidebarChatMode,
   };
 
   return (
@@ -1371,6 +1425,8 @@ export const AiSidebarChat: React.FC = () => {
     onResizeStart,
     chatRootRef,
     listRef,
+    sidebarChatMode,
+    setSidebarChatMode,
   } = ctx;
   const { AiSidebarHeaderActionsTunnel } = useTunnels();
 
@@ -1389,6 +1445,25 @@ export const AiSidebarChat: React.FC = () => {
     <>
       <AiSidebarHeaderActionsTunnel.In>
         <div className="aim-ai-sidebar-header-actions">
+          <div className="aim-ai-chat-mode-wrap">
+            <label className="aim-ai-chat-mode-label" htmlFor="aim-sidebar-chat-mode">
+              Mode
+            </label>
+            <select
+              id="aim-sidebar-chat-mode"
+              className="aim-ai-chat-mode-select"
+              value={sidebarChatMode}
+              onChange={(e) =>
+                setSidebarChatMode(e.target.value as SidebarChatMode)
+              }
+              aria-label="Assistant mode: images, topic with images, or chat"
+              disabled={loading}
+            >
+              <option value="images">Images</option>
+              <option value="topic_plus_images">Topic + images</option>
+              <option value="chat">Chat</option>
+            </select>
+          </div>
           <Tooltip label={t("labels.aiChatHistory")}>
             <Button
               type="button"
@@ -1606,6 +1681,13 @@ export const AiSidebarChat: React.FC = () => {
                 {isAssistant ? (
                   <>
                     {showPlaceholderTyping && <AiChatTypingIndicator />}
+                    {m.imagesOnly &&
+                      hasAssistantImages &&
+                      !hasAssistantText && (
+                        <p className="aim-ai-chat__images-only-hint">
+                          Reference images
+                        </p>
+                      )}
                     {hasAssistantText && (
                       <div className="aim-ai-chat__md">
                         {renderAssistantMessage(m.content, {
@@ -1621,7 +1703,14 @@ export const AiSidebarChat: React.FC = () => {
                         className="aim-ai-chat__illustrations"
                         aria-label="Reference images"
                       >
-                        {m.images.slice(0, 4).map((im, idx) => (
+                        {m.images
+                          .slice(
+                            0,
+                            m.imagesOnly
+                              ? SIDEBAR_IMAGE_GRID_CAP_IMAGES_ONLY
+                              : SIDEBAR_IMAGE_GRID_CAP_TOPIC,
+                          )
+                          .map((im, idx) => (
                           <div
                             key={`${im.url}-${idx}`}
                             role="button"

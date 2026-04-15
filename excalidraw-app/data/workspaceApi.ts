@@ -284,12 +284,31 @@ export type SidebarChatMessage = {
   role: "user" | "assistant";
   content: string;
   images?: SidebarChatImage[];
+  /** Client-only: assistant turn was images-only mode (no streamed text). */
+  imagesOnly?: boolean;
 };
+
+/** Strip client-only fields before sending to the AI backend. */
+export function sidebarMessagesForApi(
+  messages: SidebarChatMessage[],
+): Array<{ role: "user" | "assistant"; content: string; images?: SidebarChatImage[] }> {
+  return messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+    ...(m.role === "assistant" && m.images?.length
+      ? { images: m.images }
+      : {}),
+  }));
+}
+
+/** Sidebar assistant behavior; must match ai-backend `parseSidebarChatMode`. */
+export type SidebarChatMode = "topic_plus_images" | "images" | "chat";
 
 /** OpenAI-backed chat; key stays on ai-backend (OPENAI_API_KEY). Requires Clerk JWT. */
 export async function postSidebarChat(
   getToken: () => Promise<string | null>,
   messages: SidebarChatMessage[],
+  mode: SidebarChatMode = "topic_plus_images",
 ): Promise<{ text: string; images: SidebarChatImage[] }> {
   const base = getWorkspaceApiBase();
   if (!base) {
@@ -298,7 +317,7 @@ export async function postSidebarChat(
   const res = await fetch(`${base}/v1/ai/sidebar-chat`, {
     method: "POST",
     headers: await headersJson(getToken),
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, mode }),
   });
   const data = await parseJson<{
     text?: string;
@@ -314,6 +333,7 @@ export async function postSidebarChatStream(
   getToken: () => Promise<string | null>,
   messages: SidebarChatMessage[],
   options?: {
+    mode?: SidebarChatMode;
     onChunk?: (chunk: string) => void;
     onImages?: (images: SidebarChatImage[]) => void;
     signal?: AbortSignal;
@@ -334,7 +354,10 @@ export async function postSidebarChatStream(
   const res = await fetch(`${base}/v1/ai/sidebar-chat-streaming`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({
+      messages,
+      mode: options?.mode ?? "topic_plus_images",
+    }),
     signal: options?.signal,
   });
   if (!res.ok) {

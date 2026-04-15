@@ -351,11 +351,17 @@ function pruneCache() {
  * @param {number} [maxImages]
  * @returns {Promise<{ items: Array<{ url: string; alt: string }> }>}
  */
+/** Sidebar “Images” mode can request more thumbnails; MCP / topic mode typically pass 4. */
+const FETCH_IMAGES_MAX_CAP = 10;
+
 export async function fetchImagesWithMetaFromQueries(
   queriesInput,
   maxImages = 4,
 ) {
-  const cap = Math.min(Math.max(1, Number(maxImages) || 4), 4);
+  const cap = Math.min(
+    Math.max(1, Number(maxImages) || 4),
+    FETCH_IMAGES_MAX_CAP,
+  );
   const seenQ = new Set();
   const queries = [];
   for (const q of queriesInput) {
