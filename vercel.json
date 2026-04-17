@@ -52,7 +52,7 @@
   "rewrites": [
     {
       "source": "/backend/:path*",
-      "destination": "http://45.198.59.91/backend*"
+      "destination": "http://45.198.59.91/backend/:path*"
     },
     {
       "source": "/board/:path*",
