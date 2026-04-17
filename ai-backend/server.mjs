@@ -46,9 +46,11 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 const prisma = getPrisma();
 
 const isProduction = process.env.NODE_ENV === "production";
-/** Render (and similar) sit behind a reverse proxy; rate limiting and IPs need this. */
+/** Nginx / Vercel → VPS: set TRUST_PROXY=1 or BEHIND_REVERSE_PROXY=1 for correct req.ip / URL. */
 const trustProxy =
-  process.env.TRUST_PROXY === "1" || process.env.RENDER === "true";
+  process.env.TRUST_PROXY === "1" ||
+  process.env.BEHIND_REVERSE_PROXY === "1" ||
+  process.env.RENDER === "true";
 
 // Render/Heroku/Railway set PORT; local dev often uses AI_BACKEND_PORT (e.g. 3016).
 const PORT = parseInt(
@@ -74,13 +76,25 @@ const CLERK_CLOCK_SKEW_MS = Math.min(
   300_000,
   Math.max(
     5_000,
-    Number.parseInt(process.env.CLERK_CLOCK_SKEW_IN_MS ?? "", 10) || 120_000,
+    Number.parseInt(process.env.CLERK_CLOCK_SKEW_IN_MS ?? "", 10) || 300_000,
   ),
 );
+const clerkAuthorizedParties = (process.env.CLERK_AUTHORIZED_PARTIES ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 logger.info(
-  { clerkClockSkewMs: CLERK_CLOCK_SKEW_MS },
+  {
+    clerkClockSkewMs: CLERK_CLOCK_SKEW_MS,
+    clerkAuthorizedPartiesCount: clerkAuthorizedParties.length,
+  },
   "[aimtutor-ai] Clerk JWT clock skew (nbf tolerance)",
 );
+if (isProduction && clerkAuthorizedParties.length === 0) {
+  logger.warn(
+    "[aimtutor-ai] CLERK_AUTHORIZED_PARTIES is empty: set to your HTTPS frontend origin (e.g. https://your-app.vercel.app) if Bearer tokens return 401.",
+  );
+}
 
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
 const hasGoogleImageKeys =
@@ -259,7 +273,7 @@ const v1Limiter = rateLimit({
 });
 const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: isProduction ? 40 : 250,
+  max: isProduction ? 80 : 250,
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: "AI rate limit exceeded. Try again later." },
@@ -281,7 +295,37 @@ app.use((req, res, next) => {
     return next();
   }
 
-  return clerkMiddleware({ clockSkewInMs: CLERK_CLOCK_SKEW_MS })(req, res, next);
+  const clerkOpts = { clockSkewInMs: CLERK_CLOCK_SKEW_MS };
+  if (clerkAuthorizedParties.length > 0) {
+    clerkOpts.authorizedParties = clerkAuthorizedParties;
+  }
+  return clerkMiddleware(clerkOpts)(req, res, next);
+});
+/** Runtime evidence when Clerk leaves Bearer sessions unsigned-in (nbf, azp, keys, clock). */
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/v1")) {
+    return next();
+  }
+  const hasBearer =
+    typeof req.headers.authorization === "string" &&
+    req.headers.authorization.startsWith("Bearer ");
+  if (!hasBearer) {
+    return next();
+  }
+  const auth = getAuth(req);
+  if (!auth?.userId) {
+    logger.warn(
+      {
+        path: req.path,
+        sessionId: auth?.sessionId ?? null,
+        orgId: auth?.orgId ?? null,
+        origin: req.headers.origin ?? null,
+        host: req.headers.host ?? null,
+      },
+      "[clerk] Bearer present but no userId after middleware",
+    );
+  }
+  next();
 });
 app.use(auditV1Requests);
 

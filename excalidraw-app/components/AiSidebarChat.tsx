@@ -793,6 +793,8 @@ export const AiSidebarChatProvider: React.FC<{
   const [ollamaModel, setOllamaModel] = useState<string>(readStoredOllamaModel);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
+  /** Stops auto-fetch from spinning when list stays empty (429 / network / empty Ollama). */
+  const ollamaAutoLoadConsumedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const chatRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<SidebarChatMessage[]>([]);
@@ -836,25 +838,46 @@ export const AiSidebarChatProvider: React.FC<{
     }
   }, [ollamaModel]);
 
+  useEffect(() => {
+    if (aiProvider !== "ollama") {
+      ollamaAutoLoadConsumedRef.current = false;
+    }
+  }, [aiProvider]);
+
   const refreshOllamaModels = useCallback(async () => {
     setOllamaModelsLoading(true);
     try {
       const models = await fetchOllamaModels(getTokenRef.current);
       setOllamaModels(models);
-      if (!ollamaModel && models.length > 0) {
-        setOllamaModel(models[0]);
-      }
+      setOllamaModel((prev) => {
+        const t = typeof prev === "string" ? prev.trim() : "";
+        if (t) {
+          return prev;
+        }
+        return models.length > 0 ? models[0] : prev;
+      });
     } catch {
       setOllamaModels([]);
     } finally {
       setOllamaModelsLoading(false);
     }
-  }, [ollamaModel]);
+  }, []);
 
   useEffect(() => {
-    if (aiProvider === "ollama" && !ollamaModelsLoading && ollamaModels.length === 0) {
-      void refreshOllamaModels();
+    if (aiProvider !== "ollama") {
+      return;
     }
+    if (ollamaModelsLoading) {
+      return;
+    }
+    if (ollamaModels.length > 0) {
+      return;
+    }
+    if (ollamaAutoLoadConsumedRef.current) {
+      return;
+    }
+    ollamaAutoLoadConsumedRef.current = true;
+    void refreshOllamaModels();
   }, [aiProvider, ollamaModelsLoading, ollamaModels.length, refreshOllamaModels]);
 
   const refreshServerSessions = useCallback(async () => {
