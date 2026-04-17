@@ -3,10 +3,19 @@ function serializeFolderRow(r) {
     id: String(r.id),
     workspaceId: String(r.workspace_id),
     name: r.name,
-    sortOrder: r.sort_order,
+    sortOrder: Number(r.sort_order),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+/** Prisma raw rows often use bigint for counts; JSON.stringify cannot serialize BigInt. */
+function countField(value) {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 export function createWorkspaceController({
@@ -139,7 +148,7 @@ export function createWorkspaceController({
       res.json({
         folders: rows.map((r) => ({
           ...serializeFolderRow(r),
-          boardCount: r.board_count,
+          boardCount: countField(r.board_count),
         })),
       });
     },

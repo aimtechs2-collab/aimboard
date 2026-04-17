@@ -69,6 +69,14 @@ const OLLAMA_TIMEOUT_MS = parseInt(
 );
 const AI_PROVIDER_DEFAULT =
   process.env.AI_PROVIDER_DEFAULT === "ollama" ? "ollama" : "openai";
+/** Clerk JWT `nbf` vs server clock; default 5s in SDK is tight for VPS / proxy latency. */
+const CLERK_CLOCK_SKEW_MS = Math.min(
+  300_000,
+  Math.max(
+    5_000,
+    Number.parseInt(process.env.CLERK_CLOCK_SKEW_IN_MS ?? "", 10) || 60_000,
+  ),
+);
 
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
 const hasGoogleImageKeys =
@@ -263,15 +271,13 @@ const boardPutLimiter = rateLimit({
   message: { message: "Too many board saves" },
 });
 
-// app.use(clerkMiddleware());
 app.use((req, res, next) => {
   // allow public routes
   if (req.path.startsWith("/health")) {
     return next();
   }
 
-  // apply Clerk only for others
-  return clerkMiddleware()(req, res, next);
+  return clerkMiddleware({ clockSkewInMs: CLERK_CLOCK_SKEW_MS })(req, res, next);
 });
 app.use(auditV1Requests);
 

@@ -39,7 +39,7 @@ export function createAuthHelpers({ getAuth, pgQuery }) {
         typeof req.headers.authorization === "string" &&
         req.headers.authorization.startsWith("Bearer ");
       res.locals.auditError = hasBearer
-        ? "Unauthorized (Clerk rejected session JWT — check CLERK_SECRET_KEY matches VITE_CLERK_PUBLISHABLE_KEY instance)"
+        ? "Unauthorized (Clerk rejected session JWT — same Clerk app: CLERK_SECRET_KEY + CLERK_PUBLISHABLE_KEY on server, VITE_CLERK_PUBLISHABLE_KEY on client)"
         : "Unauthorized (no Authorization: Bearer token — client must call getToken() and send it)";
       res.status(401).json({ message: "Unauthorized" });
       return null;

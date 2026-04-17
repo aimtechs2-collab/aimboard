@@ -261,7 +261,10 @@ export function createBoardController(deps) {
           title: r.title,
           createdAt: r.created_at,
           updatedAt: r.updated_at,
-          messageCount: r.message_count,
+          messageCount:
+            typeof r.message_count === "bigint"
+              ? Number(r.message_count)
+              : Number(r.message_count) || 0,
         })),
       });
     },
