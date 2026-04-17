@@ -1,4 +1,4 @@
-import { ClerkProvider, useAuth, useClerk, useUser } from "@clerk/clerk-react";
+import { ClerkProvider, useAuth, useClerk } from "@clerk/clerk-react";
 import React, { createContext, useContext, useEffect, useMemo } from "react";
 
 function readMetaClerkPublishableKey(): string {
@@ -75,8 +75,8 @@ const AppAuthContext = createContext<AppAuthValue>(authDisabledValue);
 
 function ClerkBridge({ children }: { children: React.ReactNode }) {
   const { openSignIn, openSignUp } = useClerk();
-  const { isLoaded, isSignedIn } = useUser();
-  const { getToken } = useAuth();
+  /** Keep session + token source the same hook to avoid brief mismatches after sign-in. */
+  const { isLoaded, isSignedIn, getToken } = useAuth();
 
   const value = useMemo<AppAuthValue>(
     () => ({
@@ -84,7 +84,11 @@ function ClerkBridge({ children }: { children: React.ReactNode }) {
       isSignedIn: Boolean(isSignedIn),
       openSignIn,
       openSignUp,
-      getToken: async () => (await getToken()) ?? null,
+      getToken: async () => {
+        const t = await getToken();
+        const s = typeof t === "string" ? t.trim() : "";
+        return s.length > 0 ? s : null;
+      },
     }),
     [isLoaded, isSignedIn, openSignIn, openSignUp, getToken],
   );

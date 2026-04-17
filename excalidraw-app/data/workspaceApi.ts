@@ -8,12 +8,13 @@ export function getWorkspaceApiBase(): string {
 }
 
 async function headersJson(getToken: () => Promise<string | null>) {
-  const t = await getToken();
+  const raw = await getToken();
+  const t = typeof raw === "string" ? raw.trim() : "";
   const h: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
   };
-  if (t) {
+  if (t.length > 0) {
     h.Authorization = `Bearer ${t}`;
   }
   return h;

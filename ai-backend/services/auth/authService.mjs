@@ -35,7 +35,12 @@ export function createAuthHelpers({ getAuth, pgQuery }) {
   function requireAuthApi(req, res) {
     const auth = getAuth(req);
     if (!auth?.userId) {
-      res.locals.auditError = "Unauthorized (no Clerk session)";
+      const hasBearer =
+        typeof req.headers.authorization === "string" &&
+        req.headers.authorization.startsWith("Bearer ");
+      res.locals.auditError = hasBearer
+        ? "Unauthorized (Clerk rejected session JWT — check CLERK_SECRET_KEY matches VITE_CLERK_PUBLISHABLE_KEY instance)"
+        : "Unauthorized (no Authorization: Bearer token — client must call getToken() and send it)";
       res.status(401).json({ message: "Unauthorized" });
       return null;
     }
