@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("NEON_DATABASE_URL")
+}
+
+model User {
+  id            BigInt    @id @default(autoincrement())
+  clerkUserId   String    @unique @map("clerk_user_id")
+  email         String?
+  name          String?
+  avatarUrl     String?   @map("avatar_url")
+  lastApiAt     DateTime? @map("last_api_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @map("updated_at")
+  workspaces    Workspace[]
+  createdBoards Board[]   @relation("createdBoards")
+
+  @@map("users")
+}
+
+model AiUsageEvent {
+  id               BigInt   @id @default(autoincrement())
+  userId           BigInt   @map("user_id")
+  endpoint         String
+  model            String?
+  promptTokens     Int?     @map("prompt_tokens")
+  completionTokens Int?     @map("completion_tokens")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("ai_usage_events")
+}
+
+model ApiProcessLog {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt?  @map("user_id")
+  clerkUserId String?  @map("clerk_user_id")
+  route       String
+  httpMethod  String   @map("http_method")
+  statusCode  Int?     @map("status_code")
+  durationMs  Int?     @map("duration_ms")
+  clientIp    String?  @map("client_ip")
+  userAgent   String?  @map("user_agent")
+  errorMessage String? @map("error_message")
+  details     Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("api_process_logs")
+}
+
+model UserActivityEvent {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt   @map("user_id")
+  clerkUserId String   @map("clerk_user_id")
+  action      String
+  category    String?
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("user_activity_events")
+}
+
+model Workspace {
+  id          BigInt   @id @default(autoincrement())
+  ownerUserId BigInt   @unique @map("owner_user_id")
+  name        String   @default("My workspace")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+  folders     Folder[]
+  owner       User     @relation(fields: [ownerUserId], references: [id])
+
+  @@map("workspaces")
+}
+
+model Folder {
+  id          BigInt   @id @default(autoincrement())
+  workspaceId BigInt   @map("workspace_id")
+  name        String
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+  boards      Board[]
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@map("folders")
+}
+
+model Board {
+  id              BigInt    @id @default(autoincrement())
+  folderId        BigInt    @map("folder_id")
+  title           String    @default("Untitled board")
+  sceneGzip       Bytes     @map("scene_gzip")
+  createdByUserId BigInt?   @map("created_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @map("updated_at")
+  folder          Folder    @relation(fields: [folderId], references: [id])
+  creator         User?     @relation("createdBoards", fields: [createdByUserId], references: [id])
+  chatSessions    BoardAiChatSession[]
+
+  @@map("boards")
+}
+
+model BoardAiChatSession {
+  id                  BigInt   @id @default(autoincrement())
+  boardId             BigInt   @map("board_id")
+  userId              BigInt   @map("user_id")
+  title               String   @default("Chat")
+  contextMessagesJson Json     @map("context_messages_json")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @default(now()) @map("updated_at")
+  board               Board    @relation(fields: [boardId], references: [id])
+  messages            BoardAiChatMessage[]
+
+  @@map("board_ai_chat_sessions")
+}
+
+model BoardAiChatMessage {
+  id        BigInt   @id @default(autoincrement())
+  sessionId BigInt   @map("session_id")
+  position  Int
+  role      String
+  content   String   @default("")
+  imagesJson Json?   @map("images_json")
+  createdAt DateTime @default(now()) @map("created_at")
+  session   BoardAiChatSession @relation(fields: [sessionId], references: [id])
+
+  @@unique([sessionId, position])
+  @@map("board_ai_chat_messages")
+}

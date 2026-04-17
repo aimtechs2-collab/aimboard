@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:push": "prisma db push --schema prisma/schema.prisma",
     "mcp:search-images": "node mcp/search-images-server.mjs",
     "mcp:fetch-images": "node mcp/fetch-images-server.mjs"
   },
@@ -12,6 +14,7 @@
     "@clerk/backend": "3.2.4",
     "@clerk/express": "2.0.8",
     "@modelcontextprotocol/sdk": "1.12.1",
+    "@prisma/client": "6.19.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
@@ -21,6 +24,7 @@
     "pg": "8.20.0",
     "pino": "9.14.0",
     "pino-http": "10.5.0",
+    "prisma": "6.19.3",
     "socket.io": "4.8.3",
     "zod": "3.25.76"
   },
