@@ -7,28 +7,22 @@ import dotenv from "dotenv";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import OpenAI from "openai";
 
+import { buildAppDeps } from "./bootstrap/buildAppDeps.mjs";
+import { registerRoutes, routeManifest } from "./bootstrap/registerRoutes.mjs";
+import { startServer } from "./bootstrap/startServer.mjs";
 import { ensureSchema } from "./db/ensureSchema.mjs";
 import { getPrisma, pgQuery as prismaPgQuery } from "./db/prismaClient.mjs";
-import { createAuthHelpers, parseActivityEvents } from "./services/auth/authService.mjs";
-import { createMessageParsers } from "./services/chat/messageParsers.mjs";
-import {
-  createOwnershipQueries,
-  defaultEmptyScene,
-  gzipBufferToScene,
-  sceneToGzipBuffer,
-} from "./services/db/boardData.mjs";
 import { isAllowedChatImageUrl } from "./lib/googleImageSearch.mjs";
 import { logger } from "./lib/logger.mjs";
 import { createAuditV1Middleware } from "./middleware/auditV1.mjs";
 import { attachRealtimeServer } from "./realtime/socketServer.mjs";
-import { startServer } from "./bootstrap/startServer.mjs";
-import { createSystemRoutes } from "./routes/systemRoutes.mjs";
-import { createV1AiRoutes } from "./routes/v1AiRoutes.mjs";
-import { createV1BoardRoutes } from "./routes/v1BoardRoutes.mjs";
-import { createV1UserRoutes } from "./routes/v1UserRoutes.mjs";
-import { createV1WorkspaceRoutes } from "./routes/v1WorkspaceRoutes.mjs";
+import { createAiProviderService } from "./services/ai/providerService.mjs";
+import {
+  defaultEmptyScene,
+  gzipBufferToScene,
+  sceneToGzipBuffer,
+} from "./services/db/boardData.mjs";
 import {
   buildSidebarOpenAIMessages,
   parseSidebarChatMode,
@@ -36,6 +30,7 @@ import {
   SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
   SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
 } from "./services/ai/sidebarChat.mjs";
+import { createDbHealthMonitor } from "./services/db/healthMonitor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -75,141 +70,6 @@ const OLLAMA_TIMEOUT_MS = parseInt(
 const AI_PROVIDER_DEFAULT =
   process.env.AI_PROVIDER_DEFAULT === "ollama" ? "ollama" : "openai";
 
-function parseAiProvider(body) {
-  const raw = typeof body?.provider === "string" ? body.provider.trim() : "";
-  if (raw === "ollama" || raw === "gpu") {
-    return "ollama";
-  }
-  if (raw === "openai") {
-    return "openai";
-  }
-  return AI_PROVIDER_DEFAULT;
-}
-
-function parseAiModel(body, provider, fallback) {
-  const fromBody =
-    typeof body?.model === "string" ? body.model.trim().slice(0, 120) : "";
-  if (fromBody) return fromBody;
-  if (provider === "ollama") return OLLAMA_MODEL;
-  return fallback;
-}
-
-function requireAiProvider(res, provider) {
-  if (provider === "openai") {
-    if (!process.env.OPENAI_API_KEY) {
-      res.locals.auditError = "OPENAI_API_KEY is not set";
-      res.status(500).json({
-        message: isProduction
-          ? "Server configuration error"
-          : "OPENAI_API_KEY is not set. Add it to .env.development.local in the repo root.",
-      });
-      return false;
-    }
-    return true;
-  }
-  if (!OLLAMA_BASE_URL) {
-    res.locals.auditError = "OLLAMA_BASE_URL is not set";
-    res.status(500).json({
-      message: isProduction
-        ? "Server configuration error"
-        : "OLLAMA_BASE_URL is not set. Add it to .env.development.local in the repo root.",
-    });
-    return false;
-  }
-  return true;
-}
-
-function createOpenAIClient() {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-}
-
-async function ollamaChatNonStreaming({
-  model,
-  messages,
-  temperature = 0.7,
-  maxTokens = 2048,
-}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
-  try {
-    const resp = await fetch(`${OLLAMA_BASE_URL.replace(/\/$/, "")}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        stream: false,
-        options: { temperature, num_predict: maxTokens },
-        messages,
-      }),
-    });
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`Ollama error ${resp.status}: ${body || resp.statusText}`);
-    }
-    const data = await resp.json();
-    return String(data?.message?.content ?? data?.response ?? "");
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function* ollamaChatStreaming({
-  model,
-  messages,
-  temperature = 0.7,
-  maxTokens = 2048,
-}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
-  try {
-    const resp = await fetch(`${OLLAMA_BASE_URL.replace(/\/$/, "")}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        stream: true,
-        options: { temperature, num_predict: maxTokens },
-        messages,
-      }),
-    });
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`Ollama error ${resp.status}: ${body || resp.statusText}`);
-    }
-    const reader = resp.body?.getReader();
-    if (!reader) {
-      throw new Error("No Ollama response stream");
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          continue;
-        }
-        const delta = String(parsed?.message?.content ?? parsed?.response ?? "");
-        if (delta) {
-          yield delta;
-        }
-      }
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
 const hasGoogleImageKeys =
   Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
@@ -247,54 +107,6 @@ function isTransientPgError(err) {
   return false;
 }
 
-let dbConnectionHealthy = null;
-
-async function probeDbHealth() {
-  const startedAt = Date.now();
-  try {
-    await prisma.$queryRawUnsafe("SELECT 1");
-    return {
-      ok: true,
-      latencyMs: Date.now() - startedAt,
-      error: null,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - startedAt,
-      error: err?.message || "database probe failed",
-    };
-  }
-}
-
-async function monitorDbConnectivity() {
-  if (!process.env.NEON_DATABASE_URL) {
-    return;
-  }
-  const status = await probeDbHealth();
-  if (dbConnectionHealthy === status.ok) {
-    return;
-  }
-  dbConnectionHealthy = status.ok;
-  if (status.ok) {
-    logger.info(
-      {
-        module: "dbMonitor",
-        latencyMs: status.latencyMs,
-      },
-      "[db] connected",
-    );
-  } else {
-    logger.error(
-      {
-        module: "dbMonitor",
-        latencyMs: status.latencyMs,
-        error: status.error,
-      },
-      "[db] down",
-    );
-  }
-}
 
 async function pgQuery(text, params) {
   let lastErr;
@@ -319,23 +131,25 @@ async function pgQuery(text, params) {
   throw lastErr;
 }
 
-const {
-  ensureDefaultWorkspace,
-  assertWorkspaceOwned,
-  assertFolderOwned,
-  assertBoardOwned,
-  assertBoardAiSessionOwned,
-} = createOwnershipQueries({ pgQuery });
-const {
-  sanitizeChatImagesArray,
-  parseSidebarChatMessagesArray,
-  parseContextMessagesJson,
-} = createMessageParsers({ isAllowedChatImageUrl });
-const { requireAuthApi, upsertUserFromAuth } = createAuthHelpers({
+const appDeps = buildAppDeps({
+  pgQuery,
+  isAllowedChatImageUrl,
+});
+const auditV1Requests = createAuditV1Middleware({
   getAuth,
   pgQuery,
 });
-const auditV1Requests = createAuditV1Middleware({ getAuth, pgQuery });
+const aiProviderService = createAiProviderService({
+  isProduction,
+  aiProviderDefault: AI_PROVIDER_DEFAULT,
+  ollamaBaseUrl: OLLAMA_BASE_URL,
+  ollamaModel: OLLAMA_MODEL,
+  ollamaTimeoutMs: OLLAMA_TIMEOUT_MS,
+});
+const { probeDbHealth, monitorDbConnectivity } = createDbHealthMonitor({
+  prisma,
+  logger,
+});
 
 function normalizeCorsOrigin(value) {
   if (typeof value !== "string") {
@@ -460,25 +274,6 @@ app.use((req, res, next) => {
   return clerkMiddleware()(req, res, next);
 });
 app.use(auditV1Requests);
-app.use(
-  createSystemRoutes({
-    asyncRoute,
-    probeDbHealth,
-  }),
-);
-
-function requireApiKey(res) {
-  if (!process.env.OPENAI_API_KEY) {
-    res.locals.auditError = "OPENAI_API_KEY is not set";
-    res.status(500).json({
-      message: isProduction
-        ? "Server configuration error"
-        : "OPENAI_API_KEY is not set. Add it to .env.development.local in the repo root.",
-    });
-    return false;
-  }
-  return true;
-}
 
 function requireDatabase(res) {
   if (!process.env.NEON_DATABASE_URL) {
@@ -521,66 +316,27 @@ async function logUsage({
   }
 }
 
-app.use(
-  createV1UserRoutes({
-    asyncRoute,
-    requireDatabase,
-    requireAuthApi,
-    upsertUserFromAuth,
-    parseActivityEvents,
+registerRoutes({
+  app,
+  asyncRoute,
+  probeDbHealth,
+  boardPutLimiter,
+  requireDatabase,
+  appDeps: {
+    ...appDeps,
     pgQuery,
-  }),
-);
-
-app.use(
-  createV1WorkspaceRoutes({
-    asyncRoute,
-    requireDatabase,
-    requireAuthApi,
-    upsertUserFromAuth,
-    ensureDefaultWorkspace,
-    assertWorkspaceOwned,
-    assertFolderOwned,
-    pgQuery,
-  }),
-);
-app.use(
-  createV1BoardRoutes({
-    asyncRoute,
-    boardPutLimiter,
-    requireDatabase,
-    requireAuthApi,
-    upsertUserFromAuth,
-    assertFolderOwned,
-    assertBoardOwned,
-    assertBoardAiSessionOwned,
+    prisma,
     defaultEmptyScene,
     sceneToGzipBuffer,
     gzipBufferToScene,
-    parseSidebarChatMessagesArray,
-    parseContextMessagesJson,
-    sanitizeChatImagesArray,
-    pgQuery,
-    prisma,
-  }),
-);
-app.use(
-  createV1AiRoutes({
-    asyncRoute,
-    requireDatabase,
-    requireAuthApi,
-    requireAiProvider,
-    upsertUserFromAuth,
-    parseAiProvider,
-    parseAiModel,
-    createOpenAIClient,
-    ollamaChatStreaming,
-    ollamaChatNonStreaming,
-    OLLAMA_BASE_URL,
-    OLLAMA_TIMEOUT_MS,
-    MODEL,
-    VISION_MODEL,
-    MERMAID_SYSTEM,
+  },
+  aiDeps: {
+    ...aiProviderService,
+    ollamaBaseUrl: OLLAMA_BASE_URL,
+    ollamaTimeoutMs: OLLAMA_TIMEOUT_MS,
+    model: MODEL,
+    visionModel: VISION_MODEL,
+    mermaidSystem: MERMAID_SYSTEM,
     logUsage,
     publicErrorMessage,
     parseSidebarChatMode,
@@ -592,10 +348,12 @@ app.use(
         defaultModel: MODEL,
         logger,
       }),
-    SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
-    SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
-  }),
-);
+    sidebarImagesOnlyMaxReferenceImages:
+      SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
+    sidebarTopicPlusImagesMaxReferenceImages:
+      SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
+  },
+});
 
 
 app.use((_req, res) => {
@@ -631,32 +389,5 @@ startServer({
   port: PORT,
   attachRealtimeServer,
   prisma,
-  routes: [
-    "GET    /health",
-    "GET    /health/db",
-    "GET    /v1/auth/me",
-    "POST   /v1/activity",
-    "GET    /v1/workspaces",
-    "PATCH  /v1/workspaces/:workspaceId",
-    "POST   /v1/workspaces/:workspaceId/folders",
-    "GET    /v1/workspaces/:workspaceId/folders",
-    "PATCH  /v1/folders/:folderId",
-    "DELETE /v1/folders/:folderId",
-    "POST   /v1/folders/:folderId/boards",
-    "GET    /v1/folders/:folderId/boards",
-    "GET    /v1/boards/:boardId",
-    "PUT    /v1/boards/:boardId",
-    "PATCH  /v1/boards/:boardId",
-    "DELETE /v1/boards/:boardId",
-    "GET    /v1/boards/:boardId/ai-chats",
-    "GET    /v1/boards/:boardId/ai-chats/:sessionId",
-    "POST   /v1/boards/:boardId/ai-chats",
-    "PUT    /v1/boards/:boardId/ai-chats/:sessionId",
-    "DELETE /v1/boards/:boardId/ai-chats/:sessionId",
-    "GET    /v1/ai/ollama/models",
-    "POST   /v1/ai/text-to-diagram/chat-streaming",
-    "POST   /v1/ai/sidebar-chat-streaming",
-    "POST   /v1/ai/sidebar-chat",
-    "POST   /v1/ai/diagram-to-code/generate",
-  ],
+  routes: routeManifest,
 });

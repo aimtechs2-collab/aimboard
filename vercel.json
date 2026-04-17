@@ -49,6 +49,13 @@
       ]
     }
   ],
+  "routes": [
+    {
+      "src": "/backend/(.*)",
+      "dest": "${AI_BACKEND_HTTP_URL}/$1",
+      "env": ["AI_BACKEND_HTTP_URL"]
+    }
+  ],
   "rewrites": [
     {
       "source": "/board/:path*",

@@ -19,10 +19,18 @@ export function getCollabSocketServerUrl(): string {
     return "";
   }
 
+  const trimmed = rawApi.replace(/\/+$/, "");
+  if (trimmed.startsWith("/")) {
+    if (typeof window !== "undefined") {
+      return `${window.location.origin}${trimmed}`;
+    }
+    return trimmed;
+  }
+
   try {
-    const u = new URL(rawApi);
+    const u = new URL(trimmed);
     return `${u.protocol}//${u.host}`;
   } catch {
-    return rawApi.replace(/\/+$/, "");
+    return trimmed;
   }
 }
