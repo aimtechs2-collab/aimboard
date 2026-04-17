@@ -71,7 +71,7 @@ export function createWorkspaceController({
       }
       const { rows } = await pgQuery(
         `UPDATE workspaces SET name = $2, updated_at = NOW()
-         WHERE id = $1
+         WHERE id = $1::bigint
          RETURNING id, name, created_at, updated_at`,
         [workspaceId, name],
       );
@@ -110,7 +110,7 @@ export function createWorkspaceController({
         return;
       }
       const { rows } = await pgQuery(
-        `INSERT INTO folders (workspace_id, name) VALUES ($1, $2)
+        `INSERT INTO folders (workspace_id, name) VALUES ($1::bigint, $2)
          RETURNING id, workspace_id, name, sort_order, created_at, updated_at`,
         [workspaceId, name],
       );
@@ -139,7 +139,7 @@ export function createWorkspaceController({
         SELECT f.id, f.workspace_id, f.name, f.sort_order, f.created_at, f.updated_at,
           (SELECT COUNT(*)::int FROM boards b WHERE b.folder_id = f.id) AS board_count
         FROM folders f
-        WHERE f.workspace_id = $1
+        WHERE f.workspace_id = $1::bigint
         ORDER BY f.sort_order ASC, f.created_at ASC
         `,
         [workspaceId],
@@ -185,7 +185,7 @@ export function createWorkspaceController({
           name = COALESCE($2, name),
           sort_order = COALESCE($3, sort_order),
           updated_at = NOW()
-        WHERE id = $1
+        WHERE id = $1::bigint
         RETURNING id, workspace_id, name, sort_order, created_at, updated_at
         `,
         [folderId, name, sortOrder],
@@ -210,7 +210,7 @@ export function createWorkspaceController({
         res.status(404).json({ message: "Folder not found" });
         return;
       }
-      await pgQuery(`DELETE FROM folders WHERE id = $1`, [folderId]);
+      await pgQuery(`DELETE FROM folders WHERE id = $1::bigint`, [folderId]);
       res.locals.auditDetails = { kind: "folder_delete" };
       res.status(204).end();
     },

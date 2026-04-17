@@ -74,8 +74,12 @@ const CLERK_CLOCK_SKEW_MS = Math.min(
   300_000,
   Math.max(
     5_000,
-    Number.parseInt(process.env.CLERK_CLOCK_SKEW_IN_MS ?? "", 10) || 60_000,
+    Number.parseInt(process.env.CLERK_CLOCK_SKEW_IN_MS ?? "", 10) || 120_000,
   ),
+);
+logger.info(
+  { clerkClockSkewMs: CLERK_CLOCK_SKEW_MS },
+  "[aimtutor-ai] Clerk JWT clock skew (nbf tolerance)",
 );
 
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
@@ -310,7 +314,7 @@ async function logUsage({
     await pgQuery(
       `
       INSERT INTO ai_usage_events (user_id, endpoint, model, prompt_tokens, completion_tokens)
-      VALUES ($1, $2, $3, $4, $5);
+      VALUES ($1::bigint, $2, $3, $4, $5);
     `,
       [userId, endpoint, model, promptTokens, completionTokens],
     );

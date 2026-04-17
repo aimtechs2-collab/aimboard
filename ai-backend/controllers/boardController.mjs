@@ -46,7 +46,7 @@ export function createBoardController(deps) {
       const gzip = sceneToGzipBuffer(defaultEmptyScene());
       const { rows } = await pgQuery(
         `INSERT INTO boards (folder_id, title, scene_gzip, created_by_user_id)
-         VALUES ($1, $2, $3, $4)
+         VALUES ($1::bigint, $2, $3, $4::bigint)
          RETURNING id, folder_id, title, created_at, updated_at`,
         [folderId, title, gzip, localUserId],
       );
@@ -72,7 +72,7 @@ export function createBoardController(deps) {
           u.name AS author_name, u.email AS author_email
         FROM boards b
         LEFT JOIN users u ON u.id = b.created_by_user_id
-        WHERE b.folder_id = $1
+        WHERE b.folder_id = $1::bigint
         ORDER BY b.updated_at DESC
         `,
         [folderId],
@@ -169,7 +169,7 @@ export function createBoardController(deps) {
           scene_gzip = $2,
           title = COALESCE($3, title),
           updated_at = NOW()
-        WHERE id = $1
+        WHERE id = $1::bigint
         RETURNING id, folder_id, title, created_at, updated_at
         `,
         [boardId, gzip, titleUpd],
@@ -206,7 +206,7 @@ export function createBoardController(deps) {
       }
       const { rows } = await pgQuery(
         `UPDATE boards SET title = $2, updated_at = NOW()
-         WHERE id = $1
+         WHERE id = $1::bigint
          RETURNING id, folder_id, title, created_at, updated_at`,
         [boardId, title],
       );
@@ -226,7 +226,7 @@ export function createBoardController(deps) {
         res.status(404).json({ message: "Board not found" });
         return;
       }
-      await pgQuery(`DELETE FROM boards WHERE id = $1`, [boardId]);
+      await pgQuery(`DELETE FROM boards WHERE id = $1::bigint`, [boardId]);
       res.locals.auditDetails = { kind: "board_delete", boardId };
       res.status(204).end();
     },
@@ -248,7 +248,7 @@ export function createBoardController(deps) {
         SELECT s.id, s.title, s.created_at, s.updated_at,
           (SELECT COUNT(*)::int FROM board_ai_chat_messages m WHERE m.session_id = s.id) AS message_count
         FROM board_ai_chat_sessions s
-        WHERE s.board_id = $1 AND s.user_id = $2
+        WHERE s.board_id = $1::bigint AND s.user_id = $2::bigint
         ORDER BY s.updated_at DESC
         LIMIT 100
         `,
@@ -300,7 +300,7 @@ export function createBoardController(deps) {
       const msgRows = await pgQuery(
         `
         SELECT role, content, images_json FROM board_ai_chat_messages
-        WHERE session_id = $1
+        WHERE session_id = $1::bigint
         ORDER BY position ASC
         `,
         [sessionId],
@@ -350,7 +350,7 @@ export function createBoardController(deps) {
       const { rows } = await pgQuery(
         `
         INSERT INTO board_ai_chat_sessions (board_id, user_id, title)
-        VALUES ($1, $2, $3)
+        VALUES ($1::bigint, $2::bigint, $3)
         RETURNING id, title, created_at, updated_at
         `,
         [boardId, localUserId, title],
@@ -416,7 +416,7 @@ export function createBoardController(deps) {
       }
       await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe(
-          `DELETE FROM board_ai_chat_messages WHERE session_id = $1`,
+          `DELETE FROM board_ai_chat_messages WHERE session_id = $1::bigint`,
           sessionId,
         );
         for (let i = 0; i < messages.length; i++) {
@@ -426,7 +426,7 @@ export function createBoardController(deps) {
           await tx.$executeRawUnsafe(
             `
             INSERT INTO board_ai_chat_messages (session_id, position, role, content, images_json)
-            VALUES ($1, $2, $3, $4, $5::jsonb)
+            VALUES ($1::bigint, $2, $3, $4, $5::jsonb)
             `,
             sessionId,
             i,
@@ -442,7 +442,7 @@ export function createBoardController(deps) {
             title = COALESCE($2, title),
             context_messages_json = $3::jsonb,
             updated_at = NOW()
-          WHERE id = $1
+          WHERE id = $1::bigint
           `,
           sessionId,
           titleUpd,
@@ -450,12 +450,12 @@ export function createBoardController(deps) {
         );
       });
       const { rows } = await pgQuery(
-        `SELECT id, title, created_at, updated_at FROM board_ai_chat_sessions WHERE id = $1`,
+        `SELECT id, title, created_at, updated_at FROM board_ai_chat_sessions WHERE id = $1::bigint`,
         [sessionId],
       );
       const r = rows[0];
       const cnt = await pgQuery(
-        `SELECT COUNT(*)::int AS c FROM board_ai_chat_messages WHERE session_id = $1`,
+        `SELECT COUNT(*)::int AS c FROM board_ai_chat_messages WHERE session_id = $1::bigint`,
         [sessionId],
       );
       res.locals.auditDetails = { kind: "board_ai_chat_put" };
@@ -489,7 +489,7 @@ export function createBoardController(deps) {
         res.status(404).json({ message: "Chat session not found" });
         return;
       }
-      await pgQuery(`DELETE FROM board_ai_chat_sessions WHERE id = $1`, [sessionId]);
+      await pgQuery(`DELETE FROM board_ai_chat_sessions WHERE id = $1::bigint`, [sessionId]);
       res.locals.auditDetails = { kind: "board_ai_chat_delete", sessionId };
       res.status(204).end();
     },

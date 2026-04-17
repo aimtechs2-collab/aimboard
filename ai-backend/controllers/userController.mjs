@@ -16,7 +16,7 @@ export function createUserController({
       }
       const userId = await upsertUserFromAuth(auth);
       const { rows } = await pgQuery(
-        `SELECT id, clerk_user_id, email, name, avatar_url, created_at, updated_at, last_api_at FROM users WHERE id = $1`,
+        `SELECT id, clerk_user_id, email, name, avatar_url, created_at, updated_at, last_api_at FROM users WHERE id = $1::bigint`,
         [userId],
       );
       res.locals.auditDetails = { kind: "auth_me" };
@@ -45,9 +45,11 @@ export function createUserController({
       const params = [];
       let n = 1;
       for (const ev of events) {
+        const u = n;
         placeholders.push(
-          `($${n++}, $${n++}, $${n++}, $${n++}, $${n++}::jsonb)`,
+          `($${u}::bigint, $${u + 1}, $${u + 2}, $${u + 3}, $${u + 4}::jsonb)`,
         );
+        n += 5;
         params.push(
           localUserId,
           auth.userId,

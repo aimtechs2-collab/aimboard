@@ -21,7 +21,7 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
           user_id, clerk_user_id, route, http_method, status_code, duration_ms,
           client_ip, user_agent, error_message, details
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb);
+        VALUES ($1::bigint, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb);
       `,
         [
           userId,
@@ -46,7 +46,7 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
       return;
     }
     try {
-      await pgQuery(`UPDATE users SET last_api_at = NOW() WHERE id = $1`, [userId]);
+      await pgQuery(`UPDATE users SET last_api_at = NOW() WHERE id = $1::bigint`, [userId]);
     } catch (err) {
       console.error("[audit] touchUserLastApi failed", err);
     }
