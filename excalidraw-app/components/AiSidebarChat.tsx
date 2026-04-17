@@ -2025,32 +2025,38 @@ export const AiSidebarChat: React.FC = () => {
           {aiProvider === "ollama" && (
             <div className="aim-ai-chat__provider-row">
               <label htmlFor="aim-sidebar-ollama-model">GPU model</label>
-              <select
-                id="aim-sidebar-ollama-model"
-                className="aim-ai-chat-mode-select"
-                value={ollamaModel}
-                disabled={loading || ollamaModelsLoading}
-                onFocus={() => {
-                  if (ollamaModels.length === 0) {
-                    void refreshOllamaModels();
-                  }
-                }}
-                onChange={(e) => setOllamaModel(e.target.value)}
-              >
-                {ollamaModels.length === 0 ? (
-                  <option value={ollamaModel || ""}>
-                    {ollamaModelsLoading
-                      ? "Loading models..."
-                      : ollamaModel || "No models found"}
-                  </option>
-                ) : (
-                  ollamaModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+              <div className="aim-ai-chat__ollama-model-controls">
+                <select
+                  id="aim-sidebar-ollama-model"
+                  className="aim-ai-chat-mode-select"
+                  value={ollamaModel}
+                  disabled={loading || ollamaModelsLoading}
+                  onChange={(e) => setOllamaModel(e.target.value)}
+                >
+                  {ollamaModels.length === 0 ? (
+                    <option value={ollamaModel || ""}>
+                      {ollamaModelsLoading
+                        ? "Loading models..."
+                        : ollamaModel || "No models found"}
                     </option>
-                  ))
-                )}
-              </select>
+                  ) : (
+                    ollamaModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  type="button"
+                  className="aim-ai-chat__ollama-refresh-btn"
+                  onClick={() => void refreshOllamaModels()}
+                  disabled={loading || ollamaModelsLoading}
+                  title="Reload models from Ollama"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
           )}
           <textarea
