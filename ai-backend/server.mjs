@@ -515,6 +515,10 @@ app.use((req, res, next) => {
 });
 app.use(auditV1Requests);
 
+app.get("/", (req, res) => {
+  res.json({ message: "Board Backend Running" });
+});
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "aimtutor-ai-backend" });
 });

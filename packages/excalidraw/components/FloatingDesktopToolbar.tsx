@@ -97,6 +97,39 @@ export const FloatingDesktopToolbar: React.FC<FloatingDesktopToolbarProps> = ({
     );
     if (side === "left") el.classList.add("floating-desktop-toolbar--docked-left");
     if (side === "right") el.classList.add("floating-desktop-toolbar--docked-right");
+
+    // Also directly set styles on __inner to bypass any CSS specificity issues
+    const inner = el.querySelector<HTMLElement>(".floating-desktop-toolbar__inner");
+    if (inner) {
+      if (side) {
+        inner.style.flexDirection = "column";
+        inner.style.alignItems = "stretch";
+        // Force all Stack_horizontal children to also go vertical
+        el.querySelectorAll<HTMLElement>(".Stack_horizontal").forEach((stack) => {
+          stack.style.flexDirection = "column";
+          stack.style.alignItems = "stretch";
+          stack.style.width = "100%";
+        });
+        el.querySelectorAll<HTMLElement>(".App-toolbar__divider").forEach((div) => {
+          div.style.width = "100%";
+          div.style.height = "1px";
+          div.style.margin = "0.25rem 0";
+        });
+      } else {
+        inner.style.flexDirection = "";
+        inner.style.alignItems = "";
+        el.querySelectorAll<HTMLElement>(".Stack_horizontal").forEach((stack) => {
+          stack.style.flexDirection = "";
+          stack.style.alignItems = "";
+          stack.style.width = "";
+        });
+        el.querySelectorAll<HTMLElement>(".App-toolbar__divider").forEach((div) => {
+          div.style.width = "";
+          div.style.height = "";
+          div.style.margin = "";
+        });
+      }
+    }
   };
 
   const snapToEdge = (el: HTMLElement, side: DockSide) => {
