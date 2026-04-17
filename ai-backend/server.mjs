@@ -503,7 +503,16 @@ const boardPutLimiter = rateLimit({
   message: { message: "Too many board saves" },
 });
 
-app.use(clerkMiddleware());
+// app.use(clerkMiddleware());
+app.use((req, res, next) => {
+  // allow public routes
+  if (req.path.startsWith("/health")) {
+    return next();
+  }
+
+  // apply Clerk only for others
+  return clerkMiddleware()(req, res, next);
+});
 app.use(auditV1Requests);
 
 app.get("/health", (_req, res) => {
@@ -2965,6 +2974,18 @@ ensureSchema()
     process.on("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((error) => {
-    logger.fatal({ err: error }, "Failed to initialize database schema");
+    const msg = error?.message || String(error);
+    if (/data transfer quota/i.test(msg)) {
+      logger.fatal(
+        {
+          err: error,
+          remediation:
+            "Neon data transfer limit reached: open the Neon project dashboard (Usage / Billing), upgrade the plan or wait for the quota window to reset. The service cannot start until Postgres accepts connections again.",
+        },
+        "Failed to initialize database schema (hosting quota)",
+      );
+    } else {
+      logger.fatal({ err: error }, "Failed to initialize database schema");
+    }
     process.exit(1);
   });
