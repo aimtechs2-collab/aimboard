@@ -49,14 +49,11 @@
       ]
     }
   ],
-  "routes": [
-    {
-      "src": "/backend/(.*)",
-      "dest": "${AI_BACKEND_HTTP_URL}/$1",
-      "env": ["AI_BACKEND_HTTP_URL"]
-    }
-  ],
   "rewrites": [
+    {
+      "source": "/backend/:path*",
+      "destination": "http://45.198.59.91/backend*"
+    },
     {
       "source": "/board/:path*",
       "destination": "/index.html"
