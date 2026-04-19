@@ -51,10 +51,6 @@
   ],
   "rewrites": [
     {
-      "source": "/backend/:path*",
-      "destination": "https://aimboard.onrender.com/:path*"
-    },
-    {
       "source": "/board/:path*",
       "destination": "/index.html"
     },
