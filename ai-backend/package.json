@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.mjs",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
-    "prisma:push": "prisma db push --schema prisma/schema.prisma",
+    "prisma:push": "node scripts/run-prisma-with-aifaboard-env.mjs db push --schema prisma/schema.prisma",
+    "db:copy-to": "node scripts/copy-postgres-tables.mjs",
     "mcp:search-images": "node mcp/search-images-server.mjs",
     "mcp:fetch-images": "node mcp/fetch-images-server.mjs"
   },
