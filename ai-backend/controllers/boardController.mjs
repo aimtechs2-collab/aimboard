@@ -349,8 +349,8 @@ export function createBoardController(deps) {
       const title = titleRaw || "Chat";
       const { rows } = await pgQuery(
         `
-        INSERT INTO board_ai_chat_sessions (board_id, user_id, title)
-        VALUES ($1::bigint, $2::bigint, $3)
+        INSERT INTO board_ai_chat_sessions (board_id, user_id, title, context_messages_json)
+        VALUES ($1::bigint, $2::bigint, $3, '[]'::jsonb)
         RETURNING id, title, created_at, updated_at
         `,
         [boardId, localUserId, title],

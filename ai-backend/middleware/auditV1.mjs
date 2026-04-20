@@ -33,7 +33,7 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
           clientIp,
           userAgent?.slice(0, 2000) ?? null,
           errorMessage?.slice(0, 2000) ?? null,
-          details == null ? null : JSON.stringify(details),
+          details == null ? null : JSON.stringify(details, (k, v) => typeof v === 'bigint' ? v.toString() : v),
         ],
       );
     } catch (err) {
