@@ -149,12 +149,19 @@ import DebugCanvas, {
 } from "./components/DebugCanvas";
 import { AimtutorWordmark } from "./components/AimtutorWordmark";
 import { AIComponents } from "./components/AI";
+import { SpreadsheetBlock } from "./components/canvas/SpreadsheetBlock";
 import { useScreenRecorder } from "./hooks/useScreenRecorder";
 import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 import { DashboardPage } from "./dashboard/DashboardPage";
 import { getBoardWithScene, putBoardScene } from "./data/workspaceApi";
+import {
+  hasSpreadsheetCustomData,
+  isSpreadsheetEmbedLink,
+} from "./components/table/spreadsheetTypes";
+import { TableTool } from "./components/table/TableTool";
 
 import "./index.scss";
+import "./components/table/table-tool.css";
 
 import { AppSidebar } from "./components/AppSidebar";
 
@@ -1198,6 +1205,12 @@ const ExcalidrawWrapper = () => {
         onChange={onChange}
         onExport={onExport}
         initialData={initialStatePromiseRef.current.promise}
+        validateEmbeddable={(link) => (isSpreadsheetEmbedLink(link) ? true : undefined)}
+        renderEmbeddable={(el) =>
+          isSpreadsheetEmbedLink(el.link) || hasSpreadsheetCustomData(el.customData)
+            ? <SpreadsheetBlock element={el} />
+            : null
+        }
         isCollaborating={isCollaborating}
         onPointerUpdate={collabAPI?.onPointerUpdate}
         UIOptions={{
@@ -1331,6 +1344,7 @@ const ExcalidrawWrapper = () => {
           )}
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
+        {excalidrawAPI ? <TableTool excalidrawAPI={excalidrawAPI} /> : null}
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />

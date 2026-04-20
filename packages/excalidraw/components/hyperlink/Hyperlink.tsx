@@ -57,6 +57,7 @@ const POPUP_HEIGHT = 42;
 const POPUP_PADDING = 5;
 const SPACE_BOTTOM = 85;
 const AUTO_HIDE_TIMEOUT = 500;
+const INTERNAL_SPREADSHEET_LINK_PREFIX = "aimboard://spreadsheet";
 
 let IS_HYPERLINK_TOOLTIP_VISIBLE = false;
 
@@ -237,6 +238,15 @@ export const Hyperlink = ({
     setAppState({ showHyperlinkPopup: "editor" });
   };
   const { x, y } = getCoordsForPopover(element, appState, elementsMap);
+  const isInternalSpreadsheetEmbed =
+    isEmbeddableElement(element) &&
+    typeof element.link === "string" &&
+    element.link.startsWith(INTERNAL_SPREADSHEET_LINK_PREFIX);
+
+  if (isInternalSpreadsheetEmbed) {
+    return null;
+  }
+
   if (
     appState.contextMenu ||
     appState.selectedElementsAreBeingDragged ||

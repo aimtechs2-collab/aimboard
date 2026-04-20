@@ -987,6 +987,26 @@
   .aim-ai-chat__typing-dot:nth-child(3) {
     animation-delay: 0.28s;
   }
+
+  .aim-centered-warning {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 120;
+    max-width: min(78vw, 520px);
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--color-primary, #6965db) 26%, rgba(255, 255, 255, 0.2));
+    background: color-mix(in srgb, var(--island-bg-color, #1f1f20) 86%, #000 14%);
+    color: var(--text-primary-color, #f5f7fa);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+    font-size: 0.86rem;
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+    pointer-events: none;
+  }
 }
 
 @keyframes aim-ai-chat-typing-bounce {

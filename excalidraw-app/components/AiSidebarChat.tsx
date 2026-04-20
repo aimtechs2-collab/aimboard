@@ -106,6 +106,21 @@ const AIMBOARD_CHAT_IMAGE_DRAG_MIME = "application/x-aimboard-chat-image";
 const IMAGE_URL_LINE_RE =
   /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)(?:\?[^\s]*)?$/i;
 
+const resolveExcalidrawImageMimeType = (mime: string) => {
+  switch (mime) {
+    case MIME_TYPES.png:
+    case MIME_TYPES.jpg:
+    case MIME_TYPES.gif:
+    case MIME_TYPES.webp:
+    case MIME_TYPES.svg:
+    case MIME_TYPES.bmp:
+    case MIME_TYPES.avif:
+      return mime;
+    default:
+      return MIME_TYPES.png;
+  }
+};
+
 /** Remove Markdown images / bare image URLs; thumbnails are shown separately in the sidebar. */
 function stripEmbeddedReferenceImages(text: string): string {
   let s = text.replace(/\r/g, "");
@@ -1581,6 +1596,7 @@ export const AiSidebarChatProvider: React.FC<{
 };
 
 export const AiSidebarChat: React.FC = () => {
+  const excalidrawAPI = useExcalidrawAPI();
   useSyncExternalStore(
     subscribeAiChatSurface,
     getAiChatSurfaceSnapshot,
@@ -1591,6 +1607,26 @@ export const AiSidebarChat: React.FC = () => {
   }, []);
   const providerMenuRef = useRef<HTMLDivElement>(null);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [centerWarning, setCenterWarning] = useState<string | null>(null);
+  const centerWarningTimerRef = useRef<number | null>(null);
+  const showCenterWarning = useCallback((message: string) => {
+    if (centerWarningTimerRef.current != null) {
+      window.clearTimeout(centerWarningTimerRef.current);
+    }
+    setCenterWarning(message);
+    centerWarningTimerRef.current = window.setTimeout(() => {
+      setCenterWarning(null);
+      centerWarningTimerRef.current = null;
+    }, 2200);
+  }, []);
+  useEffect(
+    () => () => {
+      if (centerWarningTimerRef.current != null) {
+        window.clearTimeout(centerWarningTimerRef.current);
+      }
+    },
+    [],
+  );
   useEffect(() => {
     if (!providerMenuOpen) {
       return;
@@ -1655,6 +1691,83 @@ export const AiSidebarChat: React.FC = () => {
     ollamaModelsLoading,
   } = ctx;
   const { AiSidebarHeaderActionsTunnel } = useTunnels();
+
+  const onInsertReferenceImage = useCallback(
+    async (image: SidebarChatImage) => {
+      if (!excalidrawAPI) {
+        return;
+      }
+      try {
+        const response = await fetch(image.url);
+        if (!response.ok) {
+          throw new Error(`Image fetch failed: ${response.status}`);
+        }
+        const blob = await response.blob();
+        const dataURL = await new Promise<DataURL>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error("Image decode failed"));
+          reader.onload = () => resolve(reader.result as DataURL);
+          reader.readAsDataURL(blob);
+        });
+        const { naturalWidth, naturalHeight } = await loadImageSize(dataURL);
+        const fileId = randomFileId();
+        const appState = excalidrawAPI.getAppState();
+        const zoom = appState.zoom.value || 1;
+        const x = (appState.width * 0.72 - appState.scrollX) / zoom;
+        const y = (appState.height * 0.24 - appState.scrollY) / zoom;
+        const maxSceneW = 320;
+        const scale = Math.min(1, maxSceneW / Math.max(1, naturalWidth));
+        const elW = Math.max(24, naturalWidth * scale);
+        const elH = Math.max(24, naturalHeight * scale);
+
+        excalidrawAPI.addFiles([
+          {
+            id: fileId,
+            mimeType: resolveExcalidrawImageMimeType(blob.type),
+            dataURL,
+            created: Date.now(),
+            lastRetrieved: Date.now(),
+          },
+        ]);
+
+        const [newElement] = convertToExcalidrawElements([
+          {
+            type: "image",
+            x,
+            y,
+            width: elW,
+            height: elH,
+            fileId,
+            status: "saved",
+          },
+        ]);
+        const existingElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+        excalidrawAPI.updateScene({
+          elements: [...existingElements, newElement],
+          appState: {
+            selectedElementIds: {
+              [newElement.id]: true,
+            },
+          },
+        });
+        excalidrawAPI.refresh();
+        excalidrawAPI.setToast({ message: "Image added to canvas" });
+      } catch (error: unknown) {
+        const msg = String((error as Error)?.message || "");
+        const likelyCorsBlocked =
+          error instanceof TypeError ||
+          /cors|cross-origin|failed to fetch|networkerror/i.test(msg);
+        if (likelyCorsBlocked) {
+          showCenterWarning("Image host blocked by CORS. Copy and paste the image ");
+          return;
+        }
+        excalidrawAPI.setToast({
+          message: "Could not add image to canvas (try drag-drop)",
+        });
+      }
+    },
+    [excalidrawAPI, showCenterWarning],
+  );
 
   if (!isSignedIn) {
     return (
@@ -1944,13 +2057,13 @@ export const AiSidebarChat: React.FC = () => {
                             className="aim-ai-chat__illustrations-item"
                             title={
                               im.alt
-                                ? `${im.alt} — drag to board or click to open`
-                                : "Drag to board or click to open"
+                                ? `${im.alt} — drag to board or click to add`
+                                : "Drag to board or click to add"
                             }
                             aria-label={
                               im.alt
-                                ? `${im.alt} (drag to canvas or open in new tab)`
-                                : "Reference image — drag to canvas or open in new tab"
+                                ? `${im.alt} (drag to canvas or click to add)`
+                                : "Reference image — drag to canvas or click to add"
                             }
                             draggable
                             onDragStart={(e) => {
@@ -1963,21 +2076,11 @@ export const AiSidebarChat: React.FC = () => {
                               );
                               e.dataTransfer.effectAllowed = "copy";
                             }}
-                            onClick={() =>
-                              window.open(
-                                im.url,
-                                "_blank",
-                                "noopener,noreferrer",
-                              )
-                            }
+                            onClick={() => void onInsertReferenceImage(im)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                window.open(
-                                  im.url,
-                                  "_blank",
-                                  "noopener,noreferrer",
-                                );
+                                void onInsertReferenceImage(im);
                               }
                             }}
                           >
@@ -2130,6 +2233,11 @@ export const AiSidebarChat: React.FC = () => {
           </div>
         </div>
       </div>
+      {centerWarning ? (
+        <div className="aim-centered-warning" role="status" aria-live="polite">
+          {centerWarning}
+        </div>
+      ) : null}
     </>
   );
 };
