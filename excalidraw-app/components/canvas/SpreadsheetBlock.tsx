@@ -4,7 +4,14 @@ import type {
   ExcalidrawEmbeddableElement,
   NonDeleted,
 } from "@excalidraw/element/types";
-import React, { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   AIM_SPREADSHEET_CUSTOM_KEY,
@@ -32,6 +39,7 @@ export const SpreadsheetBlock: React.FC<{ element: EmbeddableEl }> = ({
 }) => {
   const api = useExcalidrawAPI();
   const model = useMemo(() => readModel(element), [element.versionNonce, element.id]);
+  const [draftModel, setDraftModel] = useState<SpreadsheetModel>(model);
   const persistRef = useRef<ReturnType<typeof debounce> | null>(null);
   const dragStateRef = useRef<{
     startClientX: number;
@@ -39,6 +47,10 @@ export const SpreadsheetBlock: React.FC<{ element: EmbeddableEl }> = ({
     startX: number;
     startY: number;
   } | null>(null);
+
+  useEffect(() => {
+    setDraftModel(model);
+  }, [model]);
 
   useEffect(() => {
     const persist = debounce((nextModel: SpreadsheetModel) => {
@@ -128,8 +140,11 @@ export const SpreadsheetBlock: React.FC<{ element: EmbeddableEl }> = ({
       </button>
       <Suspense fallback={<div className="aim-sheet-grid-loading">Loading table...</div>}>
         <LazySpreadsheetGrid
-          model={model}
-          onModelChange={(next) => persistRef.current?.(next)}
+          model={draftModel}
+          onModelChange={(next) => {
+            setDraftModel(next);
+            persistRef.current?.(next);
+          }}
         />
       </Suspense>
     </div>

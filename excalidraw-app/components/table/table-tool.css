@@ -133,12 +133,17 @@
   height: 100%;
   --ag-font-size: 12px;
   --ag-font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --ag-foreground-color: #1f2328;
+  --ag-data-color: #1f2328;
   --ag-border-color: #b6bec7;
   --ag-header-background-color: #eef2f6;
+  --ag-header-foreground-color: #1f2328;
   --ag-row-border-color: #cfd6de;
   --ag-cell-horizontal-border: solid #d6dde5;
   --ag-range-selection-border-color: #1a73e8;
   --ag-selected-row-background-color: transparent;
+  --ag-input-text-color: #1f2328;
+  --ag-input-focus-border-color: #1a73e8;
 }
 
 .aim-sheet-grid .ag-root-wrapper {
@@ -150,26 +155,45 @@
   border-right: 1px solid #c6ced7 !important;
   border-bottom: 1px solid #b8c0ca !important;
   font-weight: 600;
-  color: #f8fbff;
+  color: #1f2328;
+}
+
+.aim-sheet-grid .ag-header-cell-label,
+.aim-sheet-grid .ag-header-cell-text {
+  color: #1f2328 !important;
 }
 
 .aim-sheet-grid .ag-cell {
   border-right: 1px solid #d2d9e1 !important;
   border-bottom: 1px solid #d2d9e1 !important;
   background: #fff;
-  color: #f5f7fa;
-  caret-color: #ffffff;
+  color: #1f2328;
+  caret-color: #1f2328;
+  overflow: hidden;
 }
 
 .aim-sheet-grid .ag-cell-value,
 .aim-sheet-grid .ag-cell .ag-cell-wrapper {
-  color: #f5f7fa;
+  color: #1f2328;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aim-sheet-grid .ag-cell-focus,
+.aim-sheet-grid .ag-cell-range-selected:not(.ag-cell-inline-editing) {
+  color: #1f2328 !important;
+}
+
+.aim-sheet-grid .ag-cell-range-selected {
+  background: #e8f0fe !important;
 }
 
 .aim-sheet-grid .ag-cell-inline-editing input,
 .aim-sheet-grid .ag-cell-inline-editing textarea {
-  color: #ffffff !important;
-  caret-color: #ffffff !important;
+  color: #1f2328 !important;
+  background: #ffffff !important;
+  caret-color: #1f2328 !important;
 }
 
 .aim-sheet-grid .ag-row:last-child .ag-cell {
@@ -225,7 +249,7 @@
 
 .aim-sheet-grid .aim-sheet-row-index {
   background: #f2f5f9;
-  color: #eef2f6;
+  color: #45505c;
   text-align: right;
   font-weight: 600;
   border-right: 1px solid #bcc5cf !important;
@@ -241,6 +265,10 @@
   padding-right: 8px;
   position: relative;
   box-sizing: border-box;
+}
+
+.aim-sheet-grid .aim-sheet-row-index-inner span {
+  color: #45505c !important;
 }
 
 .aim-sheet-grid .aim-sheet-row-resize-handle {
@@ -274,11 +302,15 @@
 .excalidraw.theme--dark .aim-sheet-grid {
   --ag-background-color: #1f1f20;
   --ag-foreground-color: #f2f2f2;
+  --ag-data-color: #f2f2f2;
   --ag-header-background-color: #2a2e33;
+  --ag-header-foreground-color: #f2f2f2;
   --ag-odd-row-background-color: #1f1f20;
   --ag-border-color: #515861;
   --ag-row-border-color: #444a52;
   --ag-cell-horizontal-border: solid #3d434b;
+  --ag-input-text-color: #f2f2f2;
+  --ag-input-focus-border-color: #8ab4f8;
 }
 
 .excalidraw.theme--dark .aim-sheet-grid .ag-root-wrapper {
@@ -289,6 +321,11 @@
 .excalidraw.theme--dark .aim-sheet-grid .ag-header-group-cell {
   border-right: 1px solid #555d67 !important;
   border-bottom: 1px solid #616872 !important;
+}
+
+.excalidraw.theme--dark .aim-sheet-grid .ag-header-cell-label,
+.excalidraw.theme--dark .aim-sheet-grid .ag-header-cell-text {
+  color: #f2f2f2 !important;
 }
 
 .excalidraw.theme--dark .aim-sheet-grid .ag-cell {
@@ -304,9 +341,21 @@
   color: #f5f7fa;
 }
 
+.excalidraw.theme--dark .aim-sheet-grid .ag-cell-focus,
+.excalidraw.theme--dark
+  .aim-sheet-grid
+  .ag-cell-range-selected:not(.ag-cell-inline-editing) {
+  color: #f5f7fa !important;
+}
+
+.excalidraw.theme--dark .aim-sheet-grid .ag-cell-range-selected {
+  background: #263445 !important;
+}
+
 .excalidraw.theme--dark .aim-sheet-grid .ag-cell-inline-editing input,
 .excalidraw.theme--dark .aim-sheet-grid .ag-cell-inline-editing textarea {
   color: #ffffff !important;
+  background: #1f1f20 !important;
   caret-color: #ffffff !important;
 }
 
@@ -314,6 +363,10 @@
   background: #2a2d32;
   color: #d6d9dd;
   border-right-color: #59606a !important;
+}
+
+.excalidraw.theme--dark .aim-sheet-grid .aim-sheet-row-index-inner span {
+  color: #d6d9dd !important;
 }
 
 .excalidraw.theme--dark .aim-sheet-grid .ag-header-cell:hover .ag-header-cell-resize::after {

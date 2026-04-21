@@ -21,7 +21,7 @@ export const TablePicker: React.FC<{
     <div className="aim-table-picker" role="dialog" aria-label="Insert table">
       <div className="aim-table-picker__title">
         {hover.cols > 0 && hover.rows > 0
-          ? `${hover.cols} x ${hover.rows}`
+          ? `${hover.rows} x ${hover.cols}`
           : "Select table size"}
       </div>
       <div

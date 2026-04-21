@@ -30,6 +30,158 @@ const colName = (i: number) => {
 
 const modules: Module[] = [AllCommunityModule];
 
+const colNameToIndex = (name: string) => {
+  let idx = 0;
+  const upper = name.toUpperCase();
+  for (let i = 0; i < upper.length; i++) {
+    const code = upper.charCodeAt(i);
+    if (code < 65 || code > 90) {
+      return -1;
+    }
+    idx = idx * 26 + (code - 64);
+  }
+  return idx - 1;
+};
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const tokenizeArithmetic = (expression: string): string[] | null => {
+  const compact = expression.replace(/\s+/g, "");
+  if (!compact) {
+    return [];
+  }
+  if (!/^[0-9+\-*/().]+$/.test(compact)) {
+    return null;
+  }
+  const tokens = compact.match(/\d+(?:\.\d+)?|[()+\-*/]/g);
+  return tokens ?? null;
+};
+
+const precedence = (op: string) => {
+  if (op === "+" || op === "-") {
+    return 1;
+  }
+  if (op === "*" || op === "/") {
+    return 2;
+  }
+  return 0;
+};
+
+const applyOp = (values: number[], op: string): boolean => {
+  const b = values.pop();
+  const a = values.pop();
+  if (a == null || b == null) {
+    return false;
+  }
+  if (op === "+") {
+    values.push(a + b);
+    return true;
+  }
+  if (op === "-") {
+    values.push(a - b);
+    return true;
+  }
+  if (op === "*") {
+    values.push(a * b);
+    return true;
+  }
+  if (op === "/") {
+    if (b === 0) {
+      values.push(Number.NaN);
+      return true;
+    }
+    values.push(a / b);
+    return true;
+  }
+  return false;
+};
+
+const evaluateArithmeticExpression = (expression: string): number | null => {
+  const tokens = tokenizeArithmetic(expression);
+  if (!tokens) {
+    return null;
+  }
+
+  const normalized: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const prev = normalized[normalized.length - 1];
+    if (token === "-" && (i === 0 || prev === "(" || prev === "+" || prev === "-" || prev === "*" || prev === "/")) {
+      normalized.push("0");
+      normalized.push("-");
+      continue;
+    }
+    normalized.push(token);
+  }
+
+  const values: number[] = [];
+  const ops: string[] = [];
+  for (const token of normalized) {
+    if (/^\d/.test(token)) {
+      values.push(Number(token));
+      continue;
+    }
+    if (token === "(") {
+      ops.push(token);
+      continue;
+    }
+    if (token === ")") {
+      while (ops.length && ops[ops.length - 1] !== "(") {
+        const op = ops.pop()!;
+        if (!applyOp(values, op)) {
+          return null;
+        }
+      }
+      if (ops[ops.length - 1] !== "(") {
+        return null;
+      }
+      ops.pop();
+      continue;
+    }
+    while (ops.length && precedence(ops[ops.length - 1]) >= precedence(token)) {
+      const op = ops.pop()!;
+      if (!applyOp(values, op)) {
+        return null;
+      }
+    }
+    ops.push(token);
+  }
+
+  while (ops.length) {
+    const op = ops.pop()!;
+    if (op === "(") {
+      return null;
+    }
+    if (!applyOp(values, op)) {
+      return null;
+    }
+  }
+
+  if (values.length !== 1 || !Number.isFinite(values[0])) {
+    return null;
+  }
+  return values[0];
+};
+
+const buildExpandedModel = (
+  model: SpreadsheetModel,
+  requiredRows: number,
+  requiredCols: number,
+): SpreadsheetModel => {
+  const rows = Math.min(200, Math.max(model.rows, requiredRows));
+  const cols = Math.min(100, Math.max(model.cols, requiredCols));
+  if (rows === model.rows && cols === model.cols) {
+    return model;
+  }
+
+  const data = Array.from({ length: rows }, (_, r) =>
+    Array.from({ length: cols }, (_, c) => model.data[r]?.[c] ?? ""),
+  );
+  const colWidths = Array.from({ length: cols }, (_, i) => model.colWidths?.[i] ?? 0);
+  return { ...model, rows, cols, data, colWidths };
+};
+
 const parseCsvLine = (line: string): string[] => {
   const out: string[] = [];
   let cur = "";
@@ -56,6 +208,202 @@ const parseCsvLine = (line: string): string[] => {
   return out;
 };
 
+const parseClipboardLine = (line: string): string[] => {
+  if (line.includes("\t")) {
+    return line.split("\t");
+  }
+  if (line.includes(",")) {
+    return parseCsvLine(line);
+  }
+  return [line];
+};
+
+const isMarkdownSeparatorCell = (cell: string) =>
+  /^:?-{3,}:?$/.test(cell.trim());
+
+const parseMarkdownTableTextToMatrix = (raw: string): string[][] | null => {
+  const lines = raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return null;
+  }
+
+  const looksLikeMarkdownTable = lines.every((line) => line.includes("|"));
+  if (!looksLikeMarkdownTable) {
+    return null;
+  }
+
+  const rows = lines
+    .map((line) => {
+      const parts = line.split("|").map((part) => part.trim());
+      if (parts[0] === "") {
+        parts.shift();
+      }
+      if (parts[parts.length - 1] === "") {
+        parts.pop();
+      }
+      return parts;
+    })
+    .filter((cells) => cells.length > 0);
+
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const nonSeparatorRows = rows.filter(
+    (cells) => !cells.every((cell) => isMarkdownSeparatorCell(cell)),
+  );
+  if (!nonSeparatorRows.length) {
+    return null;
+  }
+
+  const maxCols = Math.max(...nonSeparatorRows.map((row) => row.length), 0);
+  if (maxCols <= 0) {
+    return null;
+  }
+
+  return nonSeparatorRows.map((row) => {
+    const padded = [...row];
+    while (padded.length < maxCols) {
+      padded.push("");
+    }
+    return padded;
+  });
+};
+
+const parseMarkdownRowsToMatrix = (rows: string[]): string[][] | null =>
+  parseMarkdownTableTextToMatrix(rows.join("\n"));
+
+const parseClipboardTextToMatrix = (raw: string): string[][] => {
+  const markdownMatrix = parseMarkdownTableTextToMatrix(raw);
+  if (markdownMatrix) {
+    return markdownMatrix;
+  }
+
+  const rows = raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line, idx, arr) => !(idx === arr.length - 1 && line === ""));
+
+  return rows.map(parseClipboardLine);
+};
+
+const evaluateFormula = (
+  raw: string,
+  model: SpreadsheetModel,
+  visiting: Set<string>,
+): string | number => {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("=")) {
+    return raw;
+  }
+
+  const expression = trimmed.slice(1).trim();
+  if (!expression) {
+    return "";
+  }
+
+  const getCellNumericValue = (ref: string): number => {
+    const match = /^([A-Z]+)(\d+)$/i.exec(ref.trim());
+    if (!match) {
+      return 0;
+    }
+    const col = colNameToIndex(match[1]);
+    const row = Number(match[2]) - 1;
+    if (col < 0 || row < 0 || row >= model.rows || col >= model.cols) {
+      return 0;
+    }
+    const key = `${row}:${col}`;
+    if (visiting.has(key)) {
+      throw new Error("CYCLE");
+    }
+    visiting.add(key);
+    const cellRaw = String(model.data[row]?.[col] ?? "");
+    let value: string | number = "";
+    try {
+      value = evaluateFormula(cellRaw, model, visiting);
+    } finally {
+      visiting.delete(key);
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fnMatch = /^(SUM|AVERAGE|AVG|MIN|MAX)\(([A-Z]+\d+):([A-Z]+\d+)\)$/i.exec(
+    expression,
+  );
+  if (fnMatch) {
+    const fn = fnMatch[1].toUpperCase();
+    const start = /^([A-Z]+)(\d+)$/i.exec(fnMatch[2]);
+    const end = /^([A-Z]+)(\d+)$/i.exec(fnMatch[3]);
+    if (!start || !end) {
+      return "#ERR";
+    }
+    const startCol = colNameToIndex(start[1]);
+    const endCol = colNameToIndex(end[1]);
+    const startRow = Number(start[2]) - 1;
+    const endRow = Number(end[2]) - 1;
+    if (
+      startCol < 0 ||
+      endCol < 0 ||
+      startRow < 0 ||
+      endRow < 0 ||
+      startCol >= model.cols ||
+      endCol >= model.cols ||
+      startRow >= model.rows ||
+      endRow >= model.rows
+    ) {
+      return "#ERR";
+    }
+
+    const c0 = Math.min(startCol, endCol);
+    const c1 = Math.max(startCol, endCol);
+    const r0 = Math.min(startRow, endRow);
+    const r1 = Math.max(startRow, endRow);
+    const values: number[] = [];
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const n = getCellNumericValue(`${colName(c)}${r + 1}`);
+        values.push(n);
+      }
+    }
+    if (!values.length) {
+      return 0;
+    }
+    if (fn === "SUM") {
+      return values.reduce((acc, n) => acc + n, 0);
+    }
+    if (fn === "MIN") {
+      return Math.min(...values);
+    }
+    if (fn === "MAX") {
+      return Math.max(...values);
+    }
+    const total = values.reduce((acc, n) => acc + n, 0);
+    return total / values.length;
+  }
+
+  try {
+    const replaced = expression.replace(/\b([A-Z]+)(\d+)\b/gi, (_, col, row) =>
+      String(getCellNumericValue(`${col}${row}`)),
+    );
+    const result = evaluateArithmeticExpression(replaced);
+    return isFiniteNumber(result) ? result : "#ERR";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "CYCLE") {
+      return "#CYCLE";
+    }
+    return "#ERR";
+  }
+};
+
 const normalizeClipboardData = (data: string[][]): string[][] => {
   if (!Array.isArray(data) || data.length === 0) {
     return data;
@@ -65,6 +413,12 @@ const normalizeClipboardData = (data: string[][]): string[][] => {
   const looksLikeSingleColumn = data.every((row) => row.length <= 1);
   if (!looksLikeSingleColumn) {
     return data;
+  }
+
+  const singleColRows = data.map((row) => String(row[0] ?? ""));
+  const markdownMatrix = parseMarkdownRowsToMatrix(singleColRows);
+  if (markdownMatrix) {
+    return markdownMatrix;
   }
 
   // If each row has commas, treat this as CSV and split safely (supports quoted values).
@@ -173,13 +527,18 @@ export const SpreadsheetGrid: React.FC<{
         headerName: colName(i),
         editable: true,
         resizable: true,
+        valueFormatter: (params: { value: unknown }) => {
+          const raw = params.value == null ? "" : String(params.value);
+          const display = evaluateFormula(raw, model, new Set());
+          return display == null ? "" : String(display);
+        },
         ...(Number(model.colWidths?.[i] ?? 0) > 0
           ? { width: Number(model.colWidths?.[i]) }
           : { flex: 1 }),
         minWidth: 72,
       })),
     ],
-    [model.cols, model.colWidths],
+    [model],
   );
 
   const rowData = useMemo<RowValue[]>(
@@ -200,39 +559,38 @@ export const SpreadsheetGrid: React.FC<{
         return;
       }
       const api = apiRef.current;
-      if (!api) {
-        return;
-      }
+      const focused = api?.getFocusedCell();
 
-      const focused = api.getFocusedCell();
-      if (!focused) {
-        return;
-      }
-
-      const startRow = focused.rowIndex ?? 0;
-      const focusedColId = focused.column?.getColId?.() ?? "col0";
+      const startRow = focused?.rowIndex ?? 0;
+      const focusedColId = focused?.column?.getColId?.() ?? "col0";
       const startCol =
         focusedColId === "__row"
           ? 0
           : Number(focusedColId.replace(/^col/, "")) || 0;
 
-      const next = model.data.map((r) => [...r]);
+      const maxColsInMatrix = matrix.reduce((max, row) => Math.max(max, row.length), 0);
+      const expandedModel = buildExpandedModel(
+        model,
+        startRow + matrix.length,
+        startCol + maxColsInMatrix,
+      );
+      const next = expandedModel.data.map((r) => [...r]);
       for (let r = 0; r < matrix.length; r++) {
         const targetRow = startRow + r;
-        if (targetRow < 0 || targetRow >= model.rows) {
+        if (targetRow < 0 || targetRow >= expandedModel.rows) {
           break;
         }
         const row = matrix[r] ?? [];
         for (let c = 0; c < row.length; c++) {
           const targetCol = startCol + c;
-          if (targetCol < 0 || targetCol >= model.cols) {
+          if (targetCol < 0 || targetCol >= expandedModel.cols) {
             break;
           }
           next[targetRow][targetCol] = row[c] ?? "";
         }
       }
 
-      onModelChange({ ...model, data: next });
+      onModelChange({ ...expandedModel, data: next });
     },
     [model, onModelChange],
   );
@@ -243,16 +601,14 @@ export const SpreadsheetGrid: React.FC<{
       if (!raw) {
         return;
       }
-      const rows = raw
-        .replace(/\r\n/g, "\n")
-        .replace(/\r/g, "\n")
-        .split("\n")
-        .filter((line, idx, arr) => !(idx === arr.length - 1 && line === ""));
-      if (!rows.length) {
-        return;
+      const api = apiRef.current;
+      if (api?.getEditingCells()?.length) {
+        const simpleText = !/[\n\r\t|]/.test(raw);
+        if (simpleText) {
+          return;
+        }
       }
-
-      const matrix = normalizeClipboardData(rows.map((line) => [line]));
+      const matrix = normalizeClipboardData(parseClipboardTextToMatrix(raw));
       if (!matrix.length) {
         return;
       }
@@ -285,11 +641,15 @@ export const SpreadsheetGrid: React.FC<{
         }}
         rowSelection={undefined}
         cellSelection={true}
+        undoRedoCellEditing={true}
+        undoRedoCellEditingLimit={100}
+        enterNavigatesVertically={true}
+        enterNavigatesVerticallyAfterEdit={true}
         singleClickEdit={true}
         enableCellTextSelection={true}
         suppressMovableColumns={true}
         suppressRowClickSelection={true}
-        suppressContextMenu={true}
+        suppressContextMenu={false}
         headerHeight={headerHeight}
         rowHeight={rowHeight}
         stopEditingWhenCellsLoseFocus={true}
