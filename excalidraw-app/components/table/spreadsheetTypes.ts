@@ -2,11 +2,21 @@ export const AIM_SPREADSHEET_LINK_PREFIX = "aimboard://spreadsheet";
 export const AIM_SPREADSHEET_LINK = `${AIM_SPREADSHEET_LINK_PREFIX}/v1`;
 export const AIM_SPREADSHEET_CUSTOM_KEY = "aimSpreadsheet" as const;
 
+export type SpreadsheetCellStyle = {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  align?: "left" | "center" | "right";
+  textColor?: string;
+  fillColor?: string;
+};
+
 export type SpreadsheetModel = {
   rows: number;
   cols: number;
   data: string[][];
   colWidths?: number[];
+  cellStyles?: Record<string, SpreadsheetCellStyle>;
 };
 
 export type SpreadsheetCustomData = {
@@ -54,6 +64,16 @@ export const normalizeModel = (input?: Partial<SpreadsheetModel> | null) => {
     const width = Number(rawWidths[i] ?? 0);
     return Number.isFinite(width) && width > 0 ? width : 0;
   });
+  const rawCellStyles =
+    input?.cellStyles && typeof input.cellStyles === "object" ? input.cellStyles : {};
+  const cellStyles = Object.fromEntries(
+    Object.entries(rawCellStyles).filter(([key, value]) => {
+      if (!/^\d+:\d+$/.test(key)) {
+        return false;
+      }
+      return Boolean(value && typeof value === "object");
+    }),
+  ) as Record<string, SpreadsheetCellStyle>;
 
-  return { rows, cols, data: nextData, colWidths } satisfies SpreadsheetModel;
+  return { rows, cols, data: nextData, colWidths, cellStyles } satisfies SpreadsheetModel;
 };

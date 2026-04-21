@@ -109,28 +109,12 @@
   position: relative;
 }
 
-.aim-sheet-block__move-handle {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 12;
-  border: 1px solid #aeb6c0;
-  border-radius: 6px;
-  background: rgb(255 255 255 / 92%);
-  color: #1f2328;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  cursor: grab;
-}
-
-.aim-sheet-block__move-handle:active {
-  cursor: grabbing;
-}
 
 .aim-sheet-grid {
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   --ag-font-size: 12px;
   --ag-font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   --ag-foreground-color: #1f2328;
@@ -146,8 +130,139 @@
   --ag-input-focus-border-color: #1a73e8;
 }
 
+.aim-sheet-toolbar {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px;
+  background: #f8fafc;
+  border: 1px solid #aeb6c0;
+  border-bottom: 0;
+  min-height: 36px;
+  height: auto;
+}
+
+.aim-sheet-name-box {
+  min-width: 56px;
+  height: 26px;
+  border: 1px solid #c5cdd6;
+  border-radius: 4px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2328;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+.aim-sheet-formula-wrap {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #c5cdd6;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.aim-sheet-formula-fx {
+  width: 28px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #617182;
+  border-right: 1px solid #d8dfe7;
+}
+
+.aim-sheet-formula-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #1f2328;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.aim-sheet-toolbar-btn {
+  height: 26px;
+  border: 1px solid #c5cdd6;
+  border-radius: 4px;
+  background: #fff;
+  color: #1f2328;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.aim-sheet-toolbar-btn:hover {
+  background: #eef3f9;
+}
+
+.aim-sheet-align-icon {
+  width: 14px;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aim-sheet-align-icon span {
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.aim-sheet-align-icon span:nth-child(1) {
+  width: 100%;
+}
+
+.aim-sheet-align-icon span:nth-child(2) {
+  width: 80%;
+}
+
+.aim-sheet-align-icon span:nth-child(3) {
+  width: 60%;
+}
+
+.aim-sheet-align-icon--left {
+  align-items: flex-start;
+}
+
+.aim-sheet-align-icon--center {
+  align-items: center;
+}
+
+.aim-sheet-align-icon--right {
+  align-items: flex-end;
+}
+
+.aim-sheet-color-input {
+  width: 28px;
+  height: 26px;
+  border: 1px solid #c5cdd6;
+  border-radius: 4px;
+  background: #fff;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.aim-sheet-grid__body {
+  min-height: 0;
+  flex: 1;
+}
+
 .aim-sheet-grid .ag-root-wrapper {
   border: 1px solid #aeb6c0;
+  height: 100%;
 }
 
 .aim-sheet-grid .ag-header-cell,
@@ -241,12 +356,6 @@
   color: #f2f2f2;
 }
 
-.excalidraw.theme--dark .aim-sheet-block__move-handle {
-  border-color: #59606a;
-  background: rgb(31 31 32 / 92%);
-  color: #f2f2f2;
-}
-
 .aim-sheet-grid .aim-sheet-row-index {
   background: #f2f5f9;
   color: #45505c;
@@ -311,6 +420,33 @@
   --ag-cell-horizontal-border: solid #3d434b;
   --ag-input-text-color: #f2f2f2;
   --ag-input-focus-border-color: #8ab4f8;
+}
+
+.excalidraw.theme--dark .aim-sheet-toolbar {
+  background: #24282d;
+  border-color: #59606a;
+}
+
+.excalidraw.theme--dark .aim-sheet-name-box,
+.excalidraw.theme--dark .aim-sheet-formula-wrap,
+.excalidraw.theme--dark .aim-sheet-toolbar-btn,
+.excalidraw.theme--dark .aim-sheet-color-input {
+  border-color: #59606a;
+  background: #1f1f20;
+  color: #f2f2f2;
+}
+
+.excalidraw.theme--dark .aim-sheet-formula-fx {
+  color: #9aa5b2;
+  border-right-color: #4e5560;
+}
+
+.excalidraw.theme--dark .aim-sheet-formula-input {
+  color: #f2f2f2;
+}
+
+.excalidraw.theme--dark .aim-sheet-toolbar-btn:hover {
+  background: #2d333a;
 }
 
 .excalidraw.theme--dark .aim-sheet-grid .ag-root-wrapper {
