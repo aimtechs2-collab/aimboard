@@ -32,6 +32,10 @@ import type { FileId } from "@excalidraw/element/types";
 
 import { useAppAuth } from "../auth/AppAuth";
 import {
+  copyAiAssistantReplyToClipboard,
+  stripEmbeddedReferenceImages,
+} from "../utils/aiReplyFormatting";
+import {
   bumpAiChatSurface,
   getAiChatSurfaceSnapshot,
   subscribeAiChatSurface,
@@ -103,9 +107,6 @@ function readStoredOllamaModel(): string {
 /** Drag reference thumbnails onto the canvas; must match App.tsx AIMBOARD_CHAT_IMAGE_DRAG_MIME. */
 const AIMBOARD_CHAT_IMAGE_DRAG_MIME = "application/x-aimboard-chat-image";
 
-const IMAGE_URL_LINE_RE =
-  /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)(?:\?[^\s]*)?$/i;
-
 const resolveExcalidrawImageMimeType = (mime: string) => {
   switch (mime) {
     case MIME_TYPES.png:
@@ -120,39 +121,6 @@ const resolveExcalidrawImageMimeType = (mime: string) => {
       return MIME_TYPES.png;
   }
 };
-
-/** Remove Markdown images / bare image URLs; thumbnails are shown separately in the sidebar. */
-function stripEmbeddedReferenceImages(text: string): string {
-  let s = text.replace(/\r/g, "");
-  s = s.replace(/^\s*\d+\.\s*!\[[^\]]*\]\([^)\n]+\)\s*$/gm, "");
-  s = s.replace(/^\s*[-*]\s+!\[[^\]]*\]\([^)\n]+\)\s*$/gm, "");
-  s = s.replace(/!\[([^\]]*)\]\([^)\n]+\)/g, (_, alt) => {
-    const t = String(alt).replace(/\s+/g, " ").trim();
-    return t ? t : "";
-  });
-  s = s.replace(
-    /\[([^\]]*)\]\(\s*(https?:\/\/[^)\s]+)\s*\)/gi,
-    (full, alt, url) => {
-      const u = String(url).toLowerCase();
-      if (
-        IMAGE_URL_LINE_RE.test(u) ||
-        /[?&]format=(png|jpe?g|webp|gif)/i.test(u) ||
-        /\/(image|img|photo|diagram)\//i.test(u)
-      ) {
-        const t = String(alt).replace(/\s+/g, " ").trim();
-        return t || "";
-      }
-      return full;
-    },
-  );
-  s = s.replace(/^\s*https?:\/\/[^\s]+\s*$/gm, (line) => {
-    const u = line.trim();
-    return IMAGE_URL_LINE_RE.test(u) ? "" : line;
-  });
-  s = s.replace(/[ \t]+\n/g, "\n");
-  s = s.replace(/\n{3,}/g, "\n\n");
-  return s.trimEnd();
-}
 
 /** Shown while the assistant reply is pending or still streaming. */
 function AiChatTypingIndicator({ compact }: { compact?: boolean }) {
@@ -758,7 +726,6 @@ type AiSidebarChatContextValue = {
     inner: string;
     displayMode: boolean;
   }) => Promise<void>;
-  onCopyAssistantReply: (text: string) => Promise<void>;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   chatRootRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
@@ -1384,18 +1351,6 @@ export const AiSidebarChatProvider: React.FC<{
     [excalidrawAPI],
   );
 
-  const onCopyAssistantReply = useCallback(
-    async (text: string) => {
-      try {
-        await navigator.clipboard.writeText(text);
-        excalidrawAPI?.setToast({ message: "Copied full reply" });
-      } catch {
-        excalidrawAPI?.setToast({ message: "Copy failed" });
-      }
-    },
-    [excalidrawAPI],
-  );
-
   const onInsertCode = useCallback(
     (code: string) => {
       if (!excalidrawAPI || !code.trim()) {
@@ -1573,7 +1528,6 @@ export const AiSidebarChatProvider: React.FC<{
     onInsertCode,
     onCopyMath,
     onInsertMath,
-    onCopyAssistantReply,
     onResizeStart,
     chatRootRef,
     listRef,
@@ -1597,6 +1551,7 @@ export const AiSidebarChatProvider: React.FC<{
 
 export const AiSidebarChat: React.FC = () => {
   const excalidrawAPI = useExcalidrawAPI();
+  const assistantMdRefs = useRef<(HTMLDivElement | null)[]>([]);
   useSyncExternalStore(
     subscribeAiChatSurface,
     getAiChatSurfaceSnapshot,
@@ -1676,7 +1631,6 @@ export const AiSidebarChat: React.FC = () => {
     onInsertCode,
     onCopyMath,
     onInsertMath,
-    onCopyAssistantReply,
     onResizeStart,
     chatRootRef,
     listRef,
@@ -2028,7 +1982,12 @@ export const AiSidebarChat: React.FC = () => {
                         </p>
                       )}
                     {hasAssistantText && (
-                      <div className="aim-ai-chat__md">
+                      <div
+                        ref={(el) => {
+                          assistantMdRefs.current[i] = el;
+                        }}
+                        className="aim-ai-chat__md"
+                      >
                         {renderAssistantMessage(m.content, {
                           onCopyCode,
                           onInsertCode,
@@ -2101,9 +2060,13 @@ export const AiSidebarChat: React.FC = () => {
                         <button
                           type="button"
                           className="aim-ai-chat__response-copy"
+                          title="Copies a formatted image (paste on board) plus cleaned text"
                           onClick={() =>
-                            void onCopyAssistantReply(
-                              stripEmbeddedReferenceImages(m.content),
+                            void copyAiAssistantReplyToClipboard(
+                              assistantMdRefs.current[i] ?? null,
+                              m.content,
+                              (msg) =>
+                                excalidrawAPI?.setToast({ message: msg }),
                             )
                           }
                         >

@@ -25,7 +25,17 @@ export function createBoardController(deps) {
     sanitizeChatImagesArray,
     pgQuery,
     prisma,
+    redisCache,
   } = deps;
+
+  const boardsCacheTtlSeconds = Number.parseInt(
+    process.env.REDIS_CACHE_TTL_BOARDS_LIST_SECONDS || "",
+    10,
+  ) || 20;
+
+  function boardsListCacheKey(localUserId, folderId) {
+    return `boards:${localUserId}:${folderId}`;
+  }
 
   return {
     async createBoard(req, res) {
@@ -50,6 +60,7 @@ export function createBoardController(deps) {
          RETURNING id, folder_id, title, created_at, updated_at`,
         [folderId, title, gzip, localUserId],
       );
+      await redisCache?.del(boardsListCacheKey(localUserId, folderId));
       res.locals.auditDetails = { kind: "board_create", boardId: rows[0].id };
       res.status(201).json({ board: serializeBoardListRow(rows[0], null) });
     },
@@ -66,6 +77,13 @@ export function createBoardController(deps) {
         res.status(404).json({ message: "Folder not found" });
         return;
       }
+      const cacheKey = boardsListCacheKey(localUserId, folderId);
+      const cached = await redisCache?.getJson(cacheKey);
+      if (cached) {
+        res.locals.auditDetails = { kind: "boards_list_cache_hit" };
+        res.json(cached);
+        return;
+      }
       const { rows } = await pgQuery(
         `
         SELECT b.id, b.folder_id, b.title, b.created_at, b.updated_at,
@@ -77,10 +95,14 @@ export function createBoardController(deps) {
         `,
         [folderId],
       );
-      res.locals.auditDetails = { kind: "boards_list" };
-      res.json({
+      const payload = {
         boards: rows.map((r) => serializeBoardListRow(r, r.author_name || r.author_email)),
+      };
+      await redisCache?.setJson(cacheKey, payload, {
+        ttlSeconds: boardsCacheTtlSeconds,
       });
+      res.locals.auditDetails = { kind: "boards_list" };
+      res.json(payload);
     },
 
     async getBoard(req, res) {
@@ -174,6 +196,7 @@ export function createBoardController(deps) {
         `,
         [boardId, gzip, titleUpd],
       );
+      await redisCache?.del(boardsListCacheKey(localUserId, rows[0].folder_id));
       res.locals.auditDetails = { kind: "board_put" };
       res.json({
         board: {
@@ -210,6 +233,7 @@ export function createBoardController(deps) {
          RETURNING id, folder_id, title, created_at, updated_at`,
         [boardId, title],
       );
+      await redisCache?.del(boardsListCacheKey(localUserId, rows[0].folder_id));
       res.locals.auditDetails = { kind: "board_patch" };
       res.json({ board: serializeBoardListRow(rows[0], null) });
     },
@@ -227,6 +251,7 @@ export function createBoardController(deps) {
         return;
       }
       await pgQuery(`DELETE FROM boards WHERE id = $1::bigint`, [boardId]);
+      await redisCache?.del(boardsListCacheKey(localUserId, board.folder_id));
       res.locals.auditDetails = { kind: "board_delete", boardId };
       res.status(204).end();
     },

@@ -26,7 +26,17 @@ export function createWorkspaceController({
   assertWorkspaceOwned,
   assertFolderOwned,
   pgQuery,
+  redisCache,
 }) {
+  const foldersCacheTtlSeconds = Number.parseInt(
+    process.env.REDIS_CACHE_TTL_FOLDERS_LIST_SECONDS || "",
+    10,
+  ) || 25;
+
+  function foldersCacheKey(localUserId, workspaceId) {
+    return `folders:${localUserId}:${workspaceId}`;
+  }
+
   return {
     async listWorkspaces(req, res) {
       if (!requireDatabase(res)) {
@@ -114,6 +124,7 @@ export function createWorkspaceController({
          RETURNING id, workspace_id, name, sort_order, created_at, updated_at`,
         [workspaceId, name],
       );
+      await redisCache?.del(foldersCacheKey(localUserId, workspaceId));
       res.locals.auditDetails = { kind: "folder_create", folderId: rows[0].id };
       res.status(201).json({ folder: serializeFolderRow(rows[0]) });
     },
@@ -134,6 +145,13 @@ export function createWorkspaceController({
         res.status(404).json({ message: "Workspace not found" });
         return;
       }
+      const cacheKey = foldersCacheKey(localUserId, workspaceId);
+      const cached = await redisCache?.getJson(cacheKey);
+      if (cached) {
+        res.locals.auditDetails = { kind: "folders_list_cache_hit" };
+        res.json(cached);
+        return;
+      }
       const { rows } = await pgQuery(
         `
         SELECT f.id, f.workspace_id, f.name, f.sort_order, f.created_at, f.updated_at,
@@ -144,13 +162,17 @@ export function createWorkspaceController({
         `,
         [workspaceId],
       );
-      res.locals.auditDetails = { kind: "folders_list" };
-      res.json({
+      const payload = {
         folders: rows.map((r) => ({
           ...serializeFolderRow(r),
           boardCount: countField(r.board_count),
         })),
+      };
+      await redisCache?.setJson(cacheKey, payload, {
+        ttlSeconds: foldersCacheTtlSeconds,
       });
+      res.locals.auditDetails = { kind: "folders_list" };
+      res.json(payload);
     },
 
     async patchFolder(req, res) {
@@ -190,6 +212,7 @@ export function createWorkspaceController({
         `,
         [folderId, name, sortOrder],
       );
+      await redisCache?.del(foldersCacheKey(localUserId, rows[0].workspace_id));
       res.locals.auditDetails = { kind: "folder_patch" };
       res.json({ folder: serializeFolderRow(rows[0]) });
     },
@@ -211,6 +234,7 @@ export function createWorkspaceController({
         return;
       }
       await pgQuery(`DELETE FROM folders WHERE id = $1::bigint`, [folderId]);
+      await redisCache?.del(foldersCacheKey(localUserId, folder.workspace_id));
       res.locals.auditDetails = { kind: "folder_delete" };
       res.status(204).end();
     },

@@ -30,6 +30,7 @@ import {
   SIDEBAR_IMAGES_ONLY_MAX_REFERENCE_IMAGES,
   SIDEBAR_TOPIC_PLUS_IMAGES_MAX_REFERENCE_IMAGES,
 } from "./services/ai/sidebarChat.mjs";
+import { createRedisCache } from "./services/cache/redisCache.mjs";
 import { createDbHealthMonitor } from "./services/db/healthMonitor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -176,6 +177,16 @@ const { probeDbHealth, monitorDbConnectivity } = createDbHealthMonitor({
   prisma,
   logger,
 });
+const redisCache = createRedisCache({
+  logger,
+  prefix: process.env.REDIS_CACHE_PREFIX?.trim() || "aifaboard:v1",
+  maxEntryBytes: Number.parseInt(process.env.REDIS_CACHE_MAX_ENTRY_BYTES || "", 10) || 65536,
+});
+if (redisCache.enabled) {
+  logger.info("[cache] Upstash Redis cache enabled");
+} else {
+  logger.info("[cache] Upstash Redis cache disabled (set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)");
+}
 
 function normalizeCorsOrigin(value) {
   if (typeof value !== "string") {
@@ -380,6 +391,7 @@ registerRoutes({
     ...appDeps,
     pgQuery,
     prisma,
+    redisCache,
     defaultEmptyScene,
     sceneToGzipBuffer,
     gzipBufferToScene,

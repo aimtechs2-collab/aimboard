@@ -65,6 +65,7 @@ export function registerRoutes({
       assertWorkspaceOwned: appDeps.assertWorkspaceOwned,
       assertFolderOwned: appDeps.assertFolderOwned,
       pgQuery: appDeps.pgQuery,
+      redisCache: appDeps.redisCache,
     }),
   );
 
@@ -86,6 +87,7 @@ export function registerRoutes({
       sanitizeChatImagesArray: appDeps.sanitizeChatImagesArray,
       pgQuery: appDeps.pgQuery,
       prisma: appDeps.prisma,
+      redisCache: appDeps.redisCache,
     }),
   );
 
