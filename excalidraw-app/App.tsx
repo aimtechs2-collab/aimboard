@@ -247,9 +247,14 @@ const initializeScene = async (opts: {
 
   let roomLinkData = getCollaborationLinkData(window.location.href);
 
-  // When opening a collaboration room link on a board route, prioritize
-  // joining the real-time room immediately instead of blocking on board fetch.
-  if (!roomLinkData && cloudBoardId && opts.fetchCloudBoard) {
+  const hasJsonShareHash = /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/.test(
+    window.location.hash,
+  );
+
+  // On /board/:id routes, don't block share-link opens behind cloud-board ACL.
+  // Guests may not have access to the board route id, but they should still be
+  // able to load a valid #json share payload.
+  if (!roomLinkData && !hasJsonShareHash && cloudBoardId && opts.fetchCloudBoard) {
     try {
       const cloudScene = await opts.fetchCloudBoard(cloudBoardId);
       if (!roomLinkData) {

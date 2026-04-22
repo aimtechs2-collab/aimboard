@@ -1345,6 +1345,23 @@ export const AiSidebarChatProvider: React.FC<{
         await navigator.clipboard.writeText(code);
         excalidrawAPI?.setToast({ message: "Copied" });
       } catch {
+        try {
+          const textarea = document.createElement("textarea");
+          textarea.value = code;
+          textarea.setAttribute("readonly", "");
+          textarea.style.position = "fixed";
+          textarea.style.left = "-9999px";
+          document.body.appendChild(textarea);
+          textarea.select();
+          const ok = document.execCommand("copy");
+          document.body.removeChild(textarea);
+          if (ok) {
+            excalidrawAPI?.setToast({ message: "Copied" });
+            return;
+          }
+        } catch {
+          /* ignore */
+        }
         excalidrawAPI?.setToast({ message: "Copy failed" });
       }
     },
@@ -1358,8 +1375,9 @@ export const AiSidebarChatProvider: React.FC<{
       }
       const appState = excalidrawAPI.getAppState();
       const zoom = appState.zoom.value || 1;
-      const x = (appState.width * 0.72 - appState.scrollX) / zoom;
-      const y = (appState.height * 0.24 - appState.scrollY) / zoom;
+      const targetWidth = 480;
+      const x = (appState.width * 0.5 - appState.scrollX) / zoom - targetWidth / 2;
+      const y = (appState.height * 0.5 - appState.scrollY) / zoom;
       const [newElement] = convertToExcalidrawElements([
         {
           type: "text",
@@ -1367,7 +1385,7 @@ export const AiSidebarChatProvider: React.FC<{
           y,
           text: code,
           fontSize: 16,
-          width: 480,
+          width: targetWidth,
         },
       ]);
       const existingElements = excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -1379,6 +1397,7 @@ export const AiSidebarChatProvider: React.FC<{
           },
         },
       });
+      excalidrawAPI.scrollToContent(newElement, { animate: true });
       excalidrawAPI.setToast({ message: "Inserted on board" });
     },
     [excalidrawAPI],
@@ -1552,6 +1571,8 @@ export const AiSidebarChatProvider: React.FC<{
 export const AiSidebarChat: React.FC = () => {
   const excalidrawAPI = useExcalidrawAPI();
   const assistantMdRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [copiedReplyIndex, setCopiedReplyIndex] = useState<number | null>(null);
+  const copiedReplyResetTimerRef = useRef<number | null>(null);
   useSyncExternalStore(
     subscribeAiChatSurface,
     getAiChatSurfaceSnapshot,
@@ -1579,8 +1600,36 @@ export const AiSidebarChat: React.FC = () => {
       if (centerWarningTimerRef.current != null) {
         window.clearTimeout(centerWarningTimerRef.current);
       }
+      if (copiedReplyResetTimerRef.current != null) {
+        window.clearTimeout(copiedReplyResetTimerRef.current);
+      }
     },
     [],
+  );
+  const onCopyAssistantReply = useCallback(
+    async (index: number, markdown: string) => {
+      let copied = false;
+      await copyAiAssistantReplyToClipboard(
+        assistantMdRefs.current[index] ?? null,
+        markdown,
+        (msg) => {
+          copied = msg.toLowerCase().startsWith("copied");
+          excalidrawAPI?.setToast({ message: msg });
+        },
+      );
+      if (!copied) {
+        return;
+      }
+      setCopiedReplyIndex(index);
+      if (copiedReplyResetTimerRef.current != null) {
+        window.clearTimeout(copiedReplyResetTimerRef.current);
+      }
+      copiedReplyResetTimerRef.current = window.setTimeout(() => {
+        setCopiedReplyIndex((prev) => (prev === index ? null : prev));
+        copiedReplyResetTimerRef.current = null;
+      }, 1500);
+    },
+    [excalidrawAPI],
   );
   useEffect(() => {
     if (!providerMenuOpen) {
@@ -2061,16 +2110,9 @@ export const AiSidebarChat: React.FC = () => {
                           type="button"
                           className="aim-ai-chat__response-copy"
                           title="Copies a formatted image (paste on board) plus cleaned text"
-                          onClick={() =>
-                            void copyAiAssistantReplyToClipboard(
-                              assistantMdRefs.current[i] ?? null,
-                              m.content,
-                              (msg) =>
-                                excalidrawAPI?.setToast({ message: msg }),
-                            )
-                          }
+                          onClick={() => void onCopyAssistantReply(i, m.content)}
                         >
-                          Copy
+                          {copiedReplyIndex === i ? "Copied" : "Copy"}
                         </button>
                       </div>
                     )}

@@ -6,7 +6,6 @@ import { useApp } from "../App";
 import { Dialog } from "../Dialog";
 import { withInternalFallback } from "../hoc/withInternalFallback";
 
-import MermaidToExcalidraw from "./MermaidToExcalidraw";
 import TextToDiagram from "./TextToDiagram";
 import TTDDialogTabs from "./TTDDialogTabs";
 import { TTDDialogTabTriggers } from "./TTDDialogTabTriggers";
@@ -66,6 +65,7 @@ const TTDDialogBase = withInternalFallback(
     | { __fallback: true }
   )) => {
     const app = useApp();
+    const activeTab = tab === "mermaid" ? "text-to-diagram" : tab;
 
     const [mermaidToExcalidrawLib, setMermaidToExcalidrawLib] =
       useState<MermaidToExcalidrawLibProps>({
@@ -92,7 +92,7 @@ const TTDDialogBase = withInternalFallback(
         {...rest}
         autofocus={false}
       >
-        <TTDDialogTabs dialog="ttd" tab={tab}>
+        <TTDDialogTabs dialog="ttd" tab={activeTab}>
           {"__fallback" in rest && rest.__fallback ? (
             <p className="dialog-mermaid-title">{t("mermaid.title")}</p>
           ) : (
@@ -104,9 +104,6 @@ const TTDDialogBase = withInternalFallback(
                     {t("chat.aiBeta")}
                   </div>
                 </div>
-              </TTDDialogTabTrigger>
-              <TTDDialogTabTrigger tab="mermaid">
-                {t("mermaid.label")}
               </TTDDialogTabTrigger>
             </TTDDialogTabTriggers>
           )}
@@ -122,12 +119,6 @@ const TTDDialogBase = withInternalFallback(
               />
             </TTDDialogTab>
           )}
-          <TTDDialogTab className="ttd-dialog-content" tab="mermaid">
-            <MermaidToExcalidraw
-              mermaidToExcalidrawLib={mermaidToExcalidrawLib}
-              isActive={tab === "mermaid"}
-            />
-          </TTDDialogTab>
         </TTDDialogTabs>
       </Dialog>
     );

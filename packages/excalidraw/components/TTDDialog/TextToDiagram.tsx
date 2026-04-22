@@ -4,7 +4,7 @@ import type { NonDeletedExcalidrawElement } from "@excalidraw/element/types";
 
 import { useAtom, useAtomValue } from "../../editor-jotai";
 
-import { useApp, useExcalidrawSetAppState } from "../App";
+import { useApp } from "../App";
 
 import { useChatAgent } from "./Chat";
 
@@ -48,7 +48,6 @@ const TextToDiagramContent = ({
   persistenceAdapter: TTDPersistenceAdapter;
 }) => {
   const app = useApp();
-  const setAppState = useExcalidrawSetAppState();
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useAtom(errorAtom);
@@ -82,9 +81,7 @@ const TextToDiagramContent = ({
   const onViewAsMermaid = () => {
     if (typeof lastAssistantMessage?.content === "string") {
       saveMermaidDataToStorage(lastAssistantMessage.content);
-      setAppState({
-        openDialog: { name: "ttd", tab: "mermaid" },
-      });
+      handleInsertToEditor();
     }
   };
 
@@ -92,9 +89,7 @@ const TextToDiagramContent = ({
     const mermaidContent = message.content || "";
     if (mermaidContent) {
       saveMermaidDataToStorage(mermaidContent);
-      setAppState({
-        openDialog: { name: "ttd", tab: "mermaid" },
-      });
+      void handleInsertMessage(message);
     }
   };
 

@@ -25,10 +25,11 @@ const downloadAsPdf = async (
     files,
     // Prevent extremely large canvases that can get clipped/partially rendered
     // in browser/canvas pipelines on some systems.
-    maxWidthOrHeight: 6144,
+    maxWidthOrHeight: 4096,
   });
 
   const { jsPDF } = await import("jspdf");
+  const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.98);
 
   // Export into a standard paper size and fit the entire board within page bounds.
   // This avoids clipping/zoom caused by very large custom page dimensions.
@@ -61,15 +62,7 @@ const downloadAsPdf = async (
   const x = (pageWidth - renderWidth) / 2;
   const y = (pageHeight - renderHeight) / 2;
 
-  pdf.addImage({
-    imageData: canvas,
-    format: "PNG",
-    x,
-    y,
-    width: renderWidth,
-    height: renderHeight,
-    compression: "SLOW",
-  });
+  pdf.addImage(jpegDataUrl, "JPEG", x, y, renderWidth, renderHeight, undefined, "NONE");
   pdf.save(`${name || "board"}.pdf`);
 };
 

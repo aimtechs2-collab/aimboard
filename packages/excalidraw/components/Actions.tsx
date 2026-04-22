@@ -72,9 +72,7 @@ import {
   EmbedIcon,
   extraToolsIcon,
   frameToolIcon,
-  mermaidLogoIcon,
   laserPointerToolIcon,
-  MagicIcon,
   LassoIcon,
   sharpArrowIcon,
   roundArrowIcon,
@@ -1333,23 +1331,6 @@ export const ShapesSwitcher = ({
             Generate
           </div>
           {app.props.aiEnabled !== false && <TTDDialogTriggerTunnel.Out />}
-          <DropdownMenu.Item
-            onSelect={() => app.setOpenDialog({ name: "ttd", tab: "mermaid" })}
-            icon={mermaidLogoIcon}
-            data-testid="toolbar-embeddable"
-          >
-            {t("toolBar.mermaidToExcalidraw")}
-          </DropdownMenu.Item>
-          {app.props.aiEnabled !== false && app.plugins.diagramToCode && (
-            <DropdownMenu.Item
-              onSelect={() => app.onMagicframeToolSelect()}
-              icon={MagicIcon}
-              data-testid="toolbar-magicframe"
-              badge={<DropdownMenu.Item.Badge>AI</DropdownMenu.Item.Badge>}
-            >
-              {t("toolBar.magicframe")}
-            </DropdownMenu.Item>
-          )}
         </DropdownMenu.Content>
       </DropdownMenu>
     </>
