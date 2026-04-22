@@ -37,6 +37,7 @@
     "i18next-browser-languagedetector": "6.1.4",
     "idb-keyval": "6.0.3",
     "jotai": "2.11.0",
+    "jspdf": "4.2.1",
     "katex": "0.16.45",
     "react": "19.0.3",
     "react-dom": "19.0.3",

@@ -2,6 +2,7 @@ import clsx from "clsx";
 
 import {
   AIMTUTOR_AI_CHAT_TAB,
+  CANVAS_SEARCH_TAB,
   DEFAULT_SIDEBAR,
   composeEventHandlers,
 } from "@excalidraw/common";
@@ -69,6 +70,13 @@ export const DefaultSidebar = Object.assign(
       const setAppState = useExcalidrawSetAppState();
 
       const { AiChatSidebarTunnel } = useTunnels();
+      const isCanvasSearchOpen =
+        appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
+        appState.openSidebar?.tab === CANVAS_SEARCH_TAB;
+
+      if (isCanvasSearchOpen) {
+        return null;
+      }
 
       return (
         <Sidebar

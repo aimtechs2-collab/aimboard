@@ -77,7 +77,7 @@ type SearchMatches = {
 
 type SearchQuery = string & { _brand: "SearchQuery" };
 
-export const SearchMenu = () => {
+export const SearchMenu = ({ floating = false }: { floating?: boolean }) => {
   const app = useApp();
   const setAppState = useExcalidrawSetAppState();
 
@@ -233,28 +233,29 @@ export const SearchMenu = () => {
           ) ||
           isTextTiny
         ) {
-          let zoomOptions: Parameters<AppClassProperties["scrollToContent"]>[1];
-
           if (isTextTiny) {
-            if (fontSize >= FONT_SIZE_LEGIBILITY_THRESHOLD) {
-              zoomOptions = { fitToContent: true };
-            } else {
-              zoomOptions = {
-                fitToViewport: true,
-                // calculate zoom level to make the fontSize ~equal to FONT_SIZE_THRESHOLD, rounded to nearest 10%
-                maxZoom: round(FONT_SIZE_LEGIBILITY_THRESHOLD / fontSize, 1),
-              };
-            }
-          } else {
-            zoomOptions = { fitToContent: true };
-          }
+            const targetZoom = round(
+              FONT_SIZE_LEGIBILITY_THRESHOLD / Math.max(fontSize, 1),
+              1,
+            );
 
-          app.scrollToContent(matchAsElement, {
-            animate: true,
-            duration: 300,
-            ...zoomOptions,
-            canvasOffsets: app.getEditorUIOffsets(),
-          });
+            // Keep current zoom as floor so next/prev never zooms out.
+            app.scrollToContent(matchAsElement, {
+              animate: true,
+              duration: 300,
+              fitToViewport: true,
+              minZoom: zoomValue,
+              maxZoom: Math.max(targetZoom, zoomValue),
+              canvasOffsets: app.getEditorUIOffsets(),
+            });
+          } else {
+            // Just pan to match while preserving current zoom level.
+            app.scrollToContent(matchAsElement, {
+              animate: true,
+              duration: 300,
+              canvasOffsets: app.getEditorUIOffsets(),
+            });
+          }
         }
       }
     }
@@ -348,7 +349,11 @@ export const SearchMenu = () => {
   }`;
 
   return (
-    <div className="layer-ui__search">
+    <div
+      className={clsx("layer-ui__search", {
+        "layer-ui__search--floating": floating,
+      })}
+    >
       <div className="layer-ui__search-header">
         <TextField
           className={CLASSES.SEARCH_MENU_INPUT_WRAPPER}
@@ -426,12 +431,14 @@ export const SearchMenu = () => {
           )}
       </div>
 
-      <MatchList
-        matches={searchMatches}
-        onItemClick={setFocusIndex}
-        focusIndex={focusIndex}
-        searchQuery={searchQuery}
-      />
+      {!floating && (
+        <MatchList
+          matches={searchMatches}
+          onItemClick={setFocusIndex}
+          focusIndex={focusIndex}
+          searchQuery={searchQuery}
+        />
+      )}
     </div>
   );
 };

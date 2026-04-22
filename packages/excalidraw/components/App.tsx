@@ -634,6 +634,404 @@ function guessImageMimeFromImageUrl(url: string): string {
   return MIME_TYPES.png;
 }
 
+/**
+ * For external AI/markdown paste, convert common markdown markers into readable
+ * plain text before creating a sketch text element.
+ */
+function normalizePastedMarkdownToPlainText(raw: string): string {
+  const lines = normalizeEOL(raw).replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  let inCode = false;
+  let codeLang = "";
+  let codeBody: string[] = [];
+
+  const flushCode = () => {
+    if (!codeBody.length && !codeLang) {
+      return;
+    }
+    if (codeLang) {
+      out.push(`[${codeLang}]`);
+    }
+    out.push(codeBody.join("\n"));
+    out.push("");
+    codeBody = [];
+    codeLang = "";
+  };
+
+  const splitTableCells = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+  const isTableSeparator = (line: string) => {
+    const cells = splitTableCells(line);
+    return (
+      cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+    );
+  };
+
+  const isTableCandidate = (line: string) =>
+    line.includes("|") && splitTableCells(line).length >= 2;
+
+  const stripInlineMd = (s: string) =>
+    s
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .trim();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const fenceMatch = trimmed.match(/^```([\w+-]+)?\s*$/);
+    if (fenceMatch) {
+      if (!inCode) {
+        inCode = true;
+        codeLang = fenceMatch[1] ?? "";
+      } else {
+        inCode = false;
+        flushCode();
+      }
+      continue;
+    }
+
+    if (inCode) {
+      codeBody.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      out.push("");
+      continue;
+    }
+
+    const nextTrimmed = (lines[i + 1] ?? "").trim();
+    if (isTableCandidate(trimmed) && isTableSeparator(nextTrimmed)) {
+      const headers = splitTableCells(trimmed).map(stripInlineMd);
+      const rows: string[][] = [];
+      let rowIndex = i + 2;
+      while (rowIndex < lines.length) {
+        const candidate = lines[rowIndex].trim();
+        if (!candidate || !isTableCandidate(candidate)) {
+          break;
+        }
+        rows.push(splitTableCells(candidate).map(stripInlineMd));
+        rowIndex += 1;
+      }
+      out.push(headers.join("\t"));
+      for (const row of rows) {
+        out.push(row.join("\t"));
+      }
+      out.push("");
+      i = rowIndex - 1;
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      const title = stripInlineMd(headingMatch[2]);
+      const level = headingMatch[1].length;
+      out.push("");
+      out.push(level <= 2 ? `▎ ${title}` : `  ${title}`);
+      out.push("");
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (orderedMatch) {
+      out.push(`${orderedMatch[1]}. ${stripInlineMd(orderedMatch[2])}`);
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      out.push(`• ${stripInlineMd(bulletMatch[1])}`);
+      continue;
+    }
+
+    out.push(stripInlineMd(trimmed));
+  }
+
+  if (inCode) {
+    flushCode();
+  }
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function shouldNormalizeMarkdownPaste(text: string): boolean {
+  if (!text || text.length < 8) {
+    return false;
+  }
+  return (
+    /(^|\n)\s{0,3}#{1,4}\s+\S/.test(text) ||
+    /(^|\n)\s*[-*]\s+\S/.test(text) ||
+    /(^|\n)\s*\d+\.\s+\S/.test(text) ||
+    /```[\s\S]*```/.test(text) ||
+    /\*\*[^*\n]+\*\*/.test(text) ||
+    /(^|\n)\s*\|[^|\n]+\|/.test(text)
+  );
+}
+
+function shouldRenderPastedTextAsCard(text: string): boolean {
+  if (!text || text.trim().length < 12) {
+    return false;
+  }
+  const lineCount = normalizeEOL(text).split("\n").length;
+  return (
+    /```[\s\S]*```/.test(text) ||
+    /(^|\n)\s{4,}\S/.test(text) ||
+    (shouldNormalizeMarkdownPaste(text) && lineCount >= 6)
+  );
+}
+
+function wrapByWords(
+  ctx: CanvasRenderingContext2D,
+  line: string,
+  maxWidth: number,
+): string[] {
+  const text = line.replace(/\t/g, "    ");
+  if (!text.trim()) {
+    return [""];
+  }
+  const words = text.split(/\s+/);
+  const out: string[] = [];
+  let cur = "";
+  for (const word of words) {
+    const next = cur ? `${cur} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth) {
+      cur = next;
+      continue;
+    }
+    if (cur) {
+      out.push(cur);
+    }
+    cur = word;
+  }
+  if (cur) {
+    out.push(cur);
+  }
+  return out.length ? out : [text];
+}
+
+function wrapCodeLine(
+  ctx: CanvasRenderingContext2D,
+  line: string,
+  maxWidth: number,
+): string[] {
+  const s = line.replace(/\t/g, "    ");
+  if (ctx.measureText(s).width <= maxWidth) {
+    return [s];
+  }
+  const out: string[] = [];
+  let cur = "";
+  for (const ch of s) {
+    const next = cur + ch;
+    if (ctx.measureText(next).width <= maxWidth) {
+      cur = next;
+    } else {
+      if (cur) {
+        out.push(cur);
+      }
+      cur = ch;
+    }
+  }
+  if (cur) {
+    out.push(cur);
+  }
+  return out.length ? out : [s];
+}
+
+async function createPastedTextCardFile(raw: string): Promise<File | null> {
+  const src = normalizeEOL(raw).replace(/\r/g, "");
+  const normalized = normalizePastedMarkdownToPlainText(src);
+  const text = normalized || src;
+  if (!text.trim()) {
+    return null;
+  }
+
+  const width = 1400;
+  const paddingX = 44;
+  const paddingY = 36;
+  const maxTextWidth = width - paddingX * 2;
+
+  const measure = document.createElement("canvas");
+  measure.width = width;
+  measure.height = 10;
+  const mCtx = measure.getContext("2d");
+  if (!mCtx) {
+    return null;
+  }
+
+  const normalFont = `28px Inter, "Segoe UI", Roboto, Arial, sans-serif`;
+  const codeFont = `25px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
+  const normalLineH = 42;
+  const codeLineH = 38;
+  const codePaddingX = 22;
+  const codePaddingY = 14;
+
+  const drawRows: Array<
+    { type: "text"; value: string } | { type: "code"; value: string }
+  > = [];
+  let inCode = false;
+  let codeLines: string[] = [];
+
+  const flushCode = () => {
+    if (!codeLines.length) {
+      return;
+    }
+    mCtx.font = codeFont;
+    for (const line of codeLines) {
+      for (const wrapped of wrapCodeLine(
+        mCtx,
+        line,
+        maxTextWidth - codePaddingX * 2,
+      )) {
+        drawRows.push({ type: "code", value: wrapped });
+      }
+    }
+    codeLines = [];
+  };
+
+  for (const line of src.split("\n")) {
+    const fence = line.trim().match(/^```([\w+-]+)?\s*$/);
+    if (fence) {
+      if (!inCode) {
+        inCode = true;
+        if (fence[1]) {
+          codeLines.push(`// ${fence[1]}`);
+        }
+      } else {
+        inCode = false;
+        flushCode();
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    mCtx.font = normalFont;
+    for (const wrapped of wrapByWords(mCtx, line, maxTextWidth)) {
+      drawRows.push({ type: "text", value: wrapped });
+    }
+  }
+  if (inCode) {
+    flushCode();
+  }
+
+  let height = paddingY * 2;
+  let inCodeRun = false;
+  for (const row of drawRows) {
+    if (row.type === "code") {
+      if (!inCodeRun) {
+        height += codePaddingY;
+        inCodeRun = true;
+      }
+      height += codeLineH;
+      continue;
+    }
+    if (inCodeRun) {
+      height += codePaddingY + 12;
+      inCodeRun = false;
+    }
+    height += normalLineH;
+  }
+  if (inCodeRun) {
+    height += codePaddingY;
+  }
+  height = Math.max(height, 260);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#111827";
+  ctx.textBaseline = "top";
+
+  let y = paddingY;
+  inCodeRun = false;
+  let codeRunStartY = 0;
+  let codeRunRowCount = 0;
+
+  // Draw in two passes for code backgrounds and text clarity.
+  const codeRowsValues: string[] = [];
+  for (const row of drawRows) {
+    if (row.type === "code") {
+      if (!inCodeRun) {
+        inCodeRun = true;
+        codeRunStartY = y;
+        codeRunRowCount = 0;
+      }
+      codeRowsValues.push(row.value);
+      y += codeLineH;
+      codeRunRowCount += 1;
+      continue;
+    }
+    if (inCodeRun) {
+      const boxTop = codeRunStartY - codePaddingY;
+      const boxHeight = y - codeRunStartY + codePaddingY;
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(paddingX, boxTop, maxTextWidth, boxHeight);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = codeFont;
+      let codeY = codeRunStartY;
+      for (
+        let i = codeRowsValues.length - codeRunRowCount;
+        i < codeRowsValues.length;
+        i++
+      ) {
+        ctx.fillText(codeRowsValues[i], paddingX + codePaddingX, codeY);
+        codeY += codeLineH;
+      }
+      y += codePaddingY + 12;
+      inCodeRun = false;
+      codeRunRowCount = 0;
+      ctx.fillStyle = "#111827";
+    }
+    ctx.font = normalFont;
+    if (row.value.length > 0) {
+      ctx.fillText(row.value, paddingX, y);
+    }
+    y += normalLineH;
+  }
+  if (inCodeRun) {
+    const boxTop = codeRunStartY - codePaddingY;
+    const boxHeight = y - codeRunStartY + codePaddingY;
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(paddingX, boxTop, maxTextWidth, boxHeight);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = codeFont;
+    let codeY = codeRunStartY;
+    for (
+      let i = codeRowsValues.length - codeRunRowCount;
+      i < codeRowsValues.length;
+      i++
+    ) {
+      ctx.fillText(codeRowsValues[i], paddingX + codePaddingX, codeY);
+      codeY += codeLineH;
+    }
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/png"),
+  );
+  if (!blob) {
+    return null;
+  }
+  return new File([blob], `pasted-text-${Date.now()}.png`, {
+    type: "image/png",
+  });
+}
+
 class App extends React.Component<AppProps, AppState> {
   canvas: AppClassProperties["canvas"];
   interactiveCanvas: AppClassProperties["interactiveCanvas"] = null;
@@ -3847,7 +4245,18 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     // ------------------- Text -------------------
-    this.addTextFromPaste(data.text, isPlainPaste);
+    if (!isPlainPaste && shouldRenderPastedTextAsCard(data.text)) {
+      const cardFile = await createPastedTextCardFile(data.text);
+      if (cardFile) {
+        await this.insertImages([cardFile], sceneX, sceneY);
+        return;
+      }
+    }
+    const textForCanvas =
+      !isPlainPaste && shouldNormalizeMarkdownPaste(data.text)
+        ? normalizePastedMarkdownToPlainText(data.text)
+        : data.text;
+    this.addTextFromPaste(textForCanvas, isPlainPaste);
   }
 
   public pasteFromClipboard = withBatchedUpdates(

@@ -264,6 +264,8 @@ export const MIME_TYPES = {
   // image-encoded excalidraw data
   "excalidraw.svg": "image/svg+xml",
   "excalidraw.png": "image/png",
+  // AimTutor local board file extension alias
+  aitutor: STRING_MIME_TYPES.excalidraw,
   // binary
   binary: "application/octet-stream",
   // image

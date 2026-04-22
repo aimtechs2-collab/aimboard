@@ -104,6 +104,20 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_board_ai_chat_messages_session_pos
     ON board_ai_chat_messages(session_id, position);`,
   `ALTER TABLE board_ai_chat_messages ADD COLUMN IF NOT EXISTS images_json JSONB;`,
+  `CREATE TABLE IF NOT EXISTS share_links (
+      id TEXT PRIMARY KEY,
+      payload BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+  `CREATE INDEX IF NOT EXISTS idx_share_links_created_at ON share_links (created_at DESC);`,
+  `CREATE TABLE IF NOT EXISTS share_link_files (
+      share_id TEXT NOT NULL REFERENCES share_links(id) ON DELETE CASCADE,
+      file_id TEXT NOT NULL,
+      payload BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (share_id, file_id)
+    );`,
+  `CREATE INDEX IF NOT EXISTS idx_share_link_files_share_created ON share_link_files (share_id, created_at DESC);`,
 ];
 
 export async function ensureSchema() {

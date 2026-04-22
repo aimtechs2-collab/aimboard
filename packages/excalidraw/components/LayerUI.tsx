@@ -2,6 +2,7 @@ import clsx from "clsx";
 import React from "react";
 
 import {
+  CANVAS_SEARCH_TAB,
   DEFAULT_SIDEBAR,
   TOOL_TYPE,
   arrayToMap,
@@ -30,6 +31,7 @@ import { LoadingMessage } from "./LoadingMessage";
 import { LockButton } from "./LockButton";
 import { MobileMenu } from "./MobileMenu";
 import { PasteChartDialog } from "./PasteChartDialog";
+import { SearchMenu } from "./SearchMenu";
 import { Section } from "./Section";
 import Stack from "./Stack";
 import { UserList } from "./UserList";
@@ -433,6 +435,10 @@ const LayerUIInner = ({
       {/* ------------------------------------------------------------------ */}
 
       {appState.isLoading && <LoadingMessage delay={250} />}
+      {appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
+        appState.openSidebar?.tab === CANVAS_SEARCH_TAB && (
+          <SearchMenu floating />
+        )}
       {appState.errorMessage && (
         <ErrorDialog onClose={() => setAppState({ errorMessage: null })}>
           {appState.errorMessage}

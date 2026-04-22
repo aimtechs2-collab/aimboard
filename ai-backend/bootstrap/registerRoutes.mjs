@@ -7,6 +7,10 @@ import { createV1WorkspaceRoutes } from "../routes/v1WorkspaceRoutes.mjs";
 export const routeManifest = [
   "GET    /health",
   "GET    /health/db",
+  "POST   /api/v2/post",
+  "GET    /api/v2/:id",
+  "PUT    /api/v2/files/:id/:fileId",
+  "GET    /api/v2/files/:id/:fileId",
   "GET    /v1/auth/me",
   "POST   /v1/activity",
   "GET    /v1/workspaces",
@@ -37,12 +41,19 @@ export function registerRoutes({
   app,
   asyncRoute,
   probeDbHealth,
-  boardPutLimiter,
   requireDatabase,
+  boardPutLimiter,
   appDeps,
   aiDeps,
 }) {
-  app.use(createSystemRoutes({ asyncRoute, probeDbHealth }));
+  app.use(
+    createSystemRoutes({
+      asyncRoute,
+      probeDbHealth,
+      pgQuery: appDeps.pgQuery,
+      requireDatabase,
+    }),
+  );
 
   app.use(
     createV1UserRoutes({

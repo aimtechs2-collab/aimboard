@@ -56,6 +56,12 @@ try {
 let firebaseApp: ReturnType<typeof initializeApp> | null = null;
 let firestore: ReturnType<typeof getFirestore> | null = null;
 let firebaseStorage: ReturnType<typeof getStorage> | null = null;
+const AI_BACKEND_BASE = (
+  typeof import.meta.env.VITE_APP_AI_BACKEND === "string"
+    ? import.meta.env.VITE_APP_AI_BACKEND
+    : ""
+).replace(/\/$/, "");
+const SHARE_LINK_PREFIX_RE = /^\/?files\/shareLinks\/([^/]+)$/;
 
 const _initializeFirebase = () => {
   if (!firebaseApp) {
@@ -149,6 +155,36 @@ export const saveFilesToFirebase = async ({
   prefix: string;
   files: { id: FileId; buffer: Uint8Array }[];
 }) => {
+  const shareMatch = prefix.match(SHARE_LINK_PREFIX_RE);
+  if (shareMatch && AI_BACKEND_BASE) {
+    const shareId = shareMatch[1];
+    const erroredFiles: FileId[] = [];
+    const savedFiles: FileId[] = [];
+    await Promise.all(
+      files.map(async ({ id, buffer }) => {
+        try {
+          const uploadBytes = new Uint8Array(buffer.byteLength);
+          uploadBytes.set(buffer);
+          const res = await fetch(
+            `${AI_BACKEND_BASE}/api/v2/files/${encodeURIComponent(shareId)}/${encodeURIComponent(id)}`,
+            {
+              method: "PUT",
+              body: uploadBytes,
+              headers: { "Content-Type": "application/octet-stream" },
+            },
+          );
+          if (!res.ok) {
+            throw new Error(`upload failed (${res.status})`);
+          }
+          savedFiles.push(id);
+        } catch {
+          erroredFiles.push(id);
+        }
+      }),
+    );
+    return { savedFiles, erroredFiles };
+  }
+
   const storage = await loadFirebaseStorage();
 
   const erroredFiles: FileId[] = [];
@@ -278,6 +314,41 @@ export const loadFilesFromFirebase = async (
 ) => {
   const loadedFiles: BinaryFileData[] = [];
   const erroredFiles = new Map<FileId, true>();
+  const shareMatch = prefix.match(SHARE_LINK_PREFIX_RE);
+  if (shareMatch && AI_BACKEND_BASE) {
+    const shareId = shareMatch[1];
+    await Promise.all(
+      [...new Set(filesIds)].map(async (id) => {
+        try {
+          const response = await fetch(
+            `${AI_BACKEND_BASE}/api/v2/files/${encodeURIComponent(shareId)}/${encodeURIComponent(id)}`,
+          );
+          if (response.status >= 400) {
+            erroredFiles.set(id, true);
+            return;
+          }
+          const arrayBuffer = await response.arrayBuffer();
+          const { data, metadata } = await decompressData<BinaryFileMetadata>(
+            new Uint8Array(arrayBuffer),
+            {
+              decryptionKey,
+            },
+          );
+          const dataURL = new TextDecoder().decode(data) as DataURL;
+          loadedFiles.push({
+            mimeType: metadata.mimeType || MIME_TYPES.binary,
+            id,
+            dataURL,
+            created: metadata?.created || Date.now(),
+            lastRetrieved: metadata?.created || Date.now(),
+          });
+        } catch {
+          erroredFiles.set(id, true);
+        }
+      }),
+    );
+    return { loadedFiles, erroredFiles };
+  }
 
   await Promise.all(
     [...new Set(filesIds)].map(async (id) => {

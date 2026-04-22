@@ -1,6 +1,6 @@
 import {
   KEYS,
-  AIMTUTOR_AI_CHAT_TAB,
+  CANVAS_SEARCH_TAB,
   DEFAULT_SIDEBAR,
 } from "@excalidraw/common";
 
@@ -31,13 +31,15 @@ export const actionToggleSearchMenu = register({
     return {
       appState: {
         ...appState,
-        openSidebar: { name: DEFAULT_SIDEBAR.name, tab: AIMTUTOR_AI_CHAT_TAB },
+        openSidebar: { name: DEFAULT_SIDEBAR.name, tab: CANVAS_SEARCH_TAB },
         openDialog: null,
       },
       captureUpdate: CaptureUpdateAction.EVENTUALLY,
     };
   },
-  checked: (appState: AppState) => appState.gridModeEnabled,
+  checked: (appState: AppState) =>
+    appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
+    appState.openSidebar?.tab === CANVAS_SEARCH_TAB,
   predicate: (element, appState, props) => {
     return props.gridModeEnabled === undefined;
   },

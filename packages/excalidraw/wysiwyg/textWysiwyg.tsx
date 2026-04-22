@@ -107,6 +107,141 @@ const getLineDirection = (text: string, offset: number) => {
   return isRTL(hardLineText) ? "rtl" : "ltr";
 };
 
+const shouldNormalizeMarkdownPaste = (text: string) => {
+  if (!text || text.length < 8) {
+    return false;
+  }
+  return (
+    /(^|\n)\s{0,3}#{1,4}\s+\S/.test(text) ||
+    /(^|\n)\s*[-*]\s+\S/.test(text) ||
+    /(^|\n)\s*\d+\.\s+\S/.test(text) ||
+    /```[\s\S]*```/.test(text) ||
+    /\*\*[^*\n]+\*\*/.test(text) ||
+    /(^|\n)\s*\|[^|\n]+\|/.test(text)
+  );
+};
+
+const normalizePastedMarkdownToPlainText = (raw: string) => {
+  const lines = raw.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  let inCode = false;
+  let codeLang = "";
+  let codeBody: string[] = [];
+
+  const flushCode = () => {
+    if (!codeBody.length && !codeLang) {
+      return;
+    }
+    if (codeLang) {
+      out.push(`[${codeLang}]`);
+    }
+    out.push(codeBody.join("\n"));
+    out.push("");
+    codeBody = [];
+    codeLang = "";
+  };
+
+  const splitTableCells = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+  const isTableSeparator = (line: string) => {
+    const cells = splitTableCells(line);
+    return (
+      cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+    );
+  };
+
+  const isTableCandidate = (line: string) =>
+    line.includes("|") && splitTableCells(line).length >= 2;
+
+  const stripInlineMd = (s: string) =>
+    s
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .trim();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const fenceMatch = trimmed.match(/^```([\w+-]+)?\s*$/);
+    if (fenceMatch) {
+      if (!inCode) {
+        inCode = true;
+        codeLang = fenceMatch[1] ?? "";
+      } else {
+        inCode = false;
+        flushCode();
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBody.push(line);
+      continue;
+    }
+    if (!trimmed) {
+      out.push("");
+      continue;
+    }
+
+    const nextTrimmed = (lines[i + 1] ?? "").trim();
+    if (isTableCandidate(trimmed) && isTableSeparator(nextTrimmed)) {
+      const headers = splitTableCells(trimmed).map(stripInlineMd);
+      const rows: string[][] = [];
+      let rowIndex = i + 2;
+      while (rowIndex < lines.length) {
+        const candidate = lines[rowIndex].trim();
+        if (!candidate || !isTableCandidate(candidate)) {
+          break;
+        }
+        rows.push(splitTableCells(candidate).map(stripInlineMd));
+        rowIndex += 1;
+      }
+      out.push(headers.join("\t"));
+      for (const row of rows) {
+        out.push(row.join("\t"));
+      }
+      out.push("");
+      i = rowIndex - 1;
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      const title = stripInlineMd(headingMatch[2]);
+      const level = headingMatch[1].length;
+      out.push("");
+      out.push(level <= 2 ? `▎ ${title}` : `  ${title}`);
+      out.push("");
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (orderedMatch) {
+      out.push(`${orderedMatch[1]}. ${stripInlineMd(orderedMatch[2])}`);
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      out.push(`• ${stripInlineMd(bulletMatch[1])}`);
+      continue;
+    }
+
+    out.push(stripInlineMd(trimmed));
+  }
+
+  if (inCode) {
+    flushCode();
+  }
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+};
+
 const getCaretBoundaryOffsets = (text: string) => {
   const offsets = [0];
   let offset = 0;
@@ -584,8 +719,22 @@ export const textWysiwyg = ({
       if (!textItem) {
         return;
       }
-      const text = normalizeText(textItem.value);
+      const incomingText =
+        shouldNormalizeMarkdownPaste(textItem.value)
+          ? normalizePastedMarkdownToPlainText(textItem.value)
+          : textItem.value;
+      const text = normalizeText(incomingText);
       if (!text) {
+        return;
+      }
+      if (incomingText !== textItem.value) {
+        event.preventDefault();
+        const { selectionStart, selectionEnd, value } = editable;
+        editable.value =
+          value.slice(0, selectionStart) + text + value.slice(selectionEnd);
+        const newPos = selectionStart + text.length;
+        editable.selectionStart = editable.selectionEnd = newPos;
+        editable.dispatchEvent(new Event("input"));
         return;
       }
       const container = getContainerElement(

@@ -62,8 +62,17 @@ export const getSyncableElements = (
     isSyncableElement(element),
   ) as SyncableExcalidrawElement[];
 
-const BACKEND_V2_GET = import.meta.env.VITE_APP_BACKEND_V2_GET_URL;
-const BACKEND_V2_POST = import.meta.env.VITE_APP_BACKEND_V2_POST_URL;
+const AI_BACKEND_BASE = (
+  typeof import.meta.env.VITE_APP_AI_BACKEND === "string"
+    ? import.meta.env.VITE_APP_AI_BACKEND
+    : ""
+).replace(/\/$/, "");
+const BACKEND_V2_GET =
+  AI_BACKEND_BASE ||
+  import.meta.env.VITE_APP_BACKEND_V2_GET_URL?.replace(/\/$/, "");
+const BACKEND_V2_POST = AI_BACKEND_BASE
+  ? `${AI_BACKEND_BASE}/api/v2/post`
+  : import.meta.env.VITE_APP_BACKEND_V2_POST_URL;
 
 const generateRoomId = async () => {
   const buffer = new Uint8Array(ROOM_ID_BYTES);
@@ -204,7 +213,11 @@ export const importFromBackend = async (
   decryptionKey: string,
 ): Promise<ImportedDataState> => {
   try {
-    const response = await fetch(`${BACKEND_V2_GET}${id}`);
+    const response = await fetch(
+      BACKEND_V2_GET?.includes("/api/v2/")
+        ? `${BACKEND_V2_GET}${id}`
+        : `${BACKEND_V2_GET}/api/v2/${id}`,
+    );
 
     if (!response.ok) {
       window.alert(t("alerts.importBackendFailed"));
@@ -250,6 +263,12 @@ export const exportToBackend = async (
   appState: Partial<AppState>,
   files: BinaryFiles,
 ): Promise<ExportToBackendResult> => {
+  if (!BACKEND_V2_POST) {
+    return {
+      url: null,
+      errorMessage: "Share backend is not configured",
+    };
+  }
   const encryptionKey = await generateEncryptionKey("string");
 
   const payload = await compressData(
@@ -276,6 +295,9 @@ export const exportToBackend = async (
     const response = await fetch(BACKEND_V2_POST, {
       method: "POST",
       body: payload.buffer,
+      headers: {
+        "Content-Type": "application/octet-stream",
+      },
     });
     const json = await response.json();
     if (json.id) {
@@ -285,10 +307,27 @@ export const exportToBackend = async (
       url.hash = `json=${json.id},${encryptionKey}`;
       const urlString = url.toString();
 
-      await saveFilesToFirebase({
-        prefix: `/files/shareLinks/${json.id}`,
-        files: filesToUpload,
-      });
+      // Share link itself is already created at this point.
+      // Firebase file upload should be best-effort so missing/misconfigured
+      // Firebase doesn't block "Export to Link" for text-only boards.
+      if (filesToUpload.length > 0) {
+        try {
+          const { erroredFiles } = await saveFilesToFirebase({
+            prefix: `/files/shareLinks/${json.id}`,
+            files: filesToUpload,
+          });
+          if (erroredFiles.length > 0) {
+            console.warn(
+              `Share link created, but ${erroredFiles.length} file(s) failed to upload.`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            "Share link created, but file upload to Firebase failed.",
+            error,
+          );
+        }
+      }
 
       return { url: urlString, errorMessage: null };
     } else if (json.error_class === "RequestTooLargeError") {

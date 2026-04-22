@@ -23,59 +23,54 @@ const downloadAsPdf = async (
       exportBackground: true,
     },
     files,
-    getDimensions: (width: number, height: number) => ({
-      width,
-      height,
-      scale: 2, // 2× for crisp print quality
-    }),
+    // Prevent extremely large canvases that can get clipped/partially rendered
+    // in browser/canvas pipelines on some systems.
+    maxWidthOrHeight: 6144,
   });
 
-  const dataUrl = canvas.toDataURL("image/png");
+  const { jsPDF } = await import("jspdf");
 
-  // Open a minimal HTML page and trigger the browser's native print/Save-as-PDF dialog
-  const printWindow = window.open("", "_blank");
-  if (!printWindow) {
-    // Fallback: direct image download if popup blocked
-    const a = document.createElement("a");
-    a.href = dataUrl;
-    a.download = `${name || "board"}.png`;
-    a.click();
-    return;
+  // Export into a standard paper size and fit the entire board within page bounds.
+  // This avoids clipping/zoom caused by very large custom page dimensions.
+  const orientation = canvas.width >= canvas.height ? "landscape" : "portrait";
+  const pdf = new jsPDF({
+    orientation,
+    unit: "mm",
+    format: "a4",
+    compress: true,
+  });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  const availableWidth = pageWidth - margin * 2;
+  const availableHeight = pageHeight - margin * 2;
+
+  const imageAspect = canvas.width / canvas.height;
+  const pageAspect = availableWidth / availableHeight;
+
+  let renderWidth = availableWidth;
+  let renderHeight = availableHeight;
+
+  if (imageAspect > pageAspect) {
+    renderHeight = renderWidth / imageAspect;
+  } else {
+    renderWidth = renderHeight * imageAspect;
   }
 
-  printWindow.document.write(`<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${name || "AimTutor Board"}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    @page { margin: 0; size: auto; }
-    html, body {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      background: #fff;
-    }
-    img {
-      max-width: 100%;
-      height: auto;
-      display: block;
-    }
-  </style>
-</head>
-<body>
-  <img src="${dataUrl}" />
-  <script>
-    window.onload = function () {
-      setTimeout(function () { window.print(); }, 250);
-    };
-  </script>
-</body>
-</html>`);
-  printWindow.document.close();
+  const x = (pageWidth - renderWidth) / 2;
+  const y = (pageHeight - renderHeight) / 2;
+
+  pdf.addImage({
+    imageData: canvas,
+    format: "PNG",
+    x,
+    y,
+    width: renderWidth,
+    height: renderHeight,
+    compression: "SLOW",
+  });
+  pdf.save(`${name || "board"}.pdf`);
 };
 
 // ── Re-exported for legacy callers (now a no-op Firebase stub) ────────────────
@@ -127,7 +122,7 @@ export const ExportToExcalidrawPlus: React.FC<{
       </div>
       <h2>aimtutor.ai+</h2>
       <div className="Card-details">
-        Download your board as a PDF via the browser print dialog.
+        Download your board as a PDF.
       </div>
       <ToolButton
         className="Card-button"
