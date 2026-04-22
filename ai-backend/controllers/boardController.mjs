@@ -250,7 +250,27 @@ export function createBoardController(deps) {
         res.status(404).json({ message: "Board not found" });
         return;
       }
-      await pgQuery(`DELETE FROM boards WHERE id = $1::bigint`, [boardId]);
+      // board_ai_chat_sessions/messages reference boards and don't cascade in DB schema.
+      // Delete in dependency order in one transaction to avoid FK violations.
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `
+          DELETE FROM board_ai_chat_messages
+          WHERE session_id IN (
+            SELECT id FROM board_ai_chat_sessions WHERE board_id = $1::bigint
+          )
+          `,
+          boardId,
+        );
+        await tx.$executeRawUnsafe(
+          `DELETE FROM board_ai_chat_sessions WHERE board_id = $1::bigint`,
+          boardId,
+        );
+        await tx.$executeRawUnsafe(
+          `DELETE FROM boards WHERE id = $1::bigint`,
+          boardId,
+        );
+      });
       await redisCache?.del(boardsListCacheKey(localUserId, board.folder_id));
       res.locals.auditDetails = { kind: "board_delete", boardId };
       res.status(204).end();
@@ -514,7 +534,16 @@ export function createBoardController(deps) {
         res.status(404).json({ message: "Chat session not found" });
         return;
       }
-      await pgQuery(`DELETE FROM board_ai_chat_sessions WHERE id = $1::bigint`, [sessionId]);
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `DELETE FROM board_ai_chat_messages WHERE session_id = $1::bigint`,
+          sessionId,
+        );
+        await tx.$executeRawUnsafe(
+          `DELETE FROM board_ai_chat_sessions WHERE id = $1::bigint`,
+          sessionId,
+        );
+      });
       res.locals.auditDetails = { kind: "board_ai_chat_delete", sessionId };
       res.status(204).end();
     },

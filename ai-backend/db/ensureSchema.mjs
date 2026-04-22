@@ -19,6 +19,8 @@ const SCHEMA_STATEMENTS = [
       completion_tokens INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_usage_events_user_id ON ai_usage_events (user_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_usage_events_created_at ON ai_usage_events (created_at DESC);`,
   `CREATE TABLE IF NOT EXISTS api_process_logs (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,

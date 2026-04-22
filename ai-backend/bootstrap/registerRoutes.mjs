@@ -65,6 +65,7 @@ export function registerRoutes({
       assertWorkspaceOwned: appDeps.assertWorkspaceOwned,
       assertFolderOwned: appDeps.assertFolderOwned,
       pgQuery: appDeps.pgQuery,
+      prisma: appDeps.prisma,
       redisCache: appDeps.redisCache,
     }),
   );

@@ -26,6 +26,7 @@ export function createWorkspaceController({
   assertWorkspaceOwned,
   assertFolderOwned,
   pgQuery,
+  prisma,
   redisCache,
 }) {
   const foldersCacheTtlSeconds = Number.parseInt(
@@ -233,7 +234,39 @@ export function createWorkspaceController({
         res.status(404).json({ message: "Folder not found" });
         return;
       }
-      await pgQuery(`DELETE FROM folders WHERE id = $1::bigint`, [folderId]);
+      // Delete dependent board chat rows before boards/folder for schemas
+      // that still use restrictive FK rules (pre-cascade migration).
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `
+          DELETE FROM board_ai_chat_messages
+          WHERE session_id IN (
+            SELECT s.id
+            FROM board_ai_chat_sessions s
+            JOIN boards b ON b.id = s.board_id
+            WHERE b.folder_id = $1::bigint
+          )
+          `,
+          folderId,
+        );
+        await tx.$executeRawUnsafe(
+          `
+          DELETE FROM board_ai_chat_sessions
+          WHERE board_id IN (
+            SELECT id FROM boards WHERE folder_id = $1::bigint
+          )
+          `,
+          folderId,
+        );
+        await tx.$executeRawUnsafe(
+          `DELETE FROM boards WHERE folder_id = $1::bigint`,
+          folderId,
+        );
+        await tx.$executeRawUnsafe(
+          `DELETE FROM folders WHERE id = $1::bigint`,
+          folderId,
+        );
+      });
       await redisCache?.del(foldersCacheKey(localUserId, folder.workspace_id));
       res.locals.auditDetails = { kind: "folder_delete" };
       res.status(204).end();

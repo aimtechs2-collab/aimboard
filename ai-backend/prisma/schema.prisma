@@ -18,6 +18,10 @@ model User {
   updatedAt     DateTime  @default(now()) @map("updated_at")
   workspaces    Workspace[]
   createdBoards Board[]   @relation("createdBoards")
+  aiUsageEvents AiUsageEvent[]
+  apiProcessLogs ApiProcessLog[]
+  userActivityEvents UserActivityEvent[]
+  boardAiChatSessions BoardAiChatSession[]
 
   @@map("users")
 }
@@ -30,7 +34,10 @@ model AiUsageEvent {
   promptTokens     Int?     @map("prompt_tokens")
   completionTokens Int?     @map("completion_tokens")
   createdAt        DateTime @default(now()) @map("created_at")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId], map: "idx_ai_usage_events_user_id")
+  @@index([createdAt], map: "idx_ai_usage_events_created_at")
   @@map("ai_usage_events")
 }
 
@@ -47,7 +54,12 @@ model ApiProcessLog {
   errorMessage String? @map("error_message")
   details     Json?
   createdAt   DateTime @default(now()) @map("created_at")
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([userId], map: "idx_api_process_logs_user_id")
+  @@index([clerkUserId], map: "idx_api_process_logs_clerk_user_id")
+  @@index([createdAt], map: "idx_api_process_logs_created_at")
+  @@index([route], map: "idx_api_process_logs_route")
   @@map("api_process_logs")
 }
 
@@ -59,7 +71,12 @@ model UserActivityEvent {
   category    String?
   metadata    Json?
   createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId], map: "idx_user_activity_user_id")
+  @@index([clerkUserId], map: "idx_user_activity_clerk_user_id")
+  @@index([createdAt], map: "idx_user_activity_created_at")
+  @@index([action], map: "idx_user_activity_action")
   @@map("user_activity_events")
 }
 
@@ -70,8 +87,9 @@ model Workspace {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @default(now()) @map("updated_at")
   folders     Folder[]
-  owner       User     @relation(fields: [ownerUserId], references: [id])
+  owner       User     @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
 
+  @@index([ownerUserId], map: "idx_workspaces_owner")
   @@map("workspaces")
 }
 
@@ -83,8 +101,9 @@ model Folder {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @default(now()) @map("updated_at")
   boards      Board[]
-  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  @@index([workspaceId], map: "idx_folders_workspace")
   @@map("folders")
 }
 
@@ -96,10 +115,11 @@ model Board {
   createdByUserId BigInt?   @map("created_by_user_id")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @default(now()) @map("updated_at")
-  folder          Folder    @relation(fields: [folderId], references: [id])
-  creator         User?     @relation("createdBoards", fields: [createdByUserId], references: [id])
+  folder          Folder    @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  creator         User?     @relation("createdBoards", fields: [createdByUserId], references: [id], onDelete: SetNull)
   chatSessions    BoardAiChatSession[]
 
+  @@index([folderId, updatedAt], map: "idx_boards_folder_updated")
   @@map("boards")
 }
 
@@ -111,9 +131,11 @@ model BoardAiChatSession {
   contextMessagesJson Json     @map("context_messages_json")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @default(now()) @map("updated_at")
-  board               Board    @relation(fields: [boardId], references: [id])
+  board               Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages            BoardAiChatMessage[]
 
+  @@index([boardId, userId, updatedAt], map: "idx_board_ai_chat_sessions_board_user_updated")
   @@map("board_ai_chat_sessions")
 }
 
@@ -125,8 +147,9 @@ model BoardAiChatMessage {
   content   String   @default("")
   imagesJson Json?   @map("images_json")
   createdAt DateTime @default(now()) @map("created_at")
-  session   BoardAiChatSession @relation(fields: [sessionId], references: [id])
+  session   BoardAiChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@index([sessionId, position], map: "idx_board_ai_chat_messages_session_pos")
   @@unique([sessionId, position])
   @@map("board_ai_chat_messages")
 }
