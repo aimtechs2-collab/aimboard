@@ -1,3 +1,5 @@
+import { observeBoardSaveSeconds } from "../utils/prometheus.mjs";
+
 function serializeBoardListRow(r, authorLabel) {
   return {
     id: String(r.id),
@@ -144,7 +146,9 @@ export function createBoardController(deps) {
       if (!auth) return;
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -185,8 +189,12 @@ export function createBoardController(deps) {
       }
       const titleUpd =
         typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : null;
-      const { rows } = await pgQuery(
-        `
+      const saveStarted = process.hrtime.bigint();
+      let saveResult = "success";
+      let rows;
+      try {
+        const q = await pgQuery(
+          `
         UPDATE boards SET
           scene_gzip = $2,
           title = COALESCE($3, title),
@@ -194,7 +202,20 @@ export function createBoardController(deps) {
         WHERE id = $1::bigint
         RETURNING id, folder_id, title, created_at, updated_at
         `,
-        [boardId, gzip, titleUpd],
+          [boardId, gzip, titleUpd],
+        );
+        rows = q.rows;
+      } catch (err) {
+        saveResult = "error";
+        observeBoardSaveSeconds(
+          Number(process.hrtime.bigint() - saveStarted) / 1e9,
+          saveResult,
+        );
+        throw err;
+      }
+      observeBoardSaveSeconds(
+        Number(process.hrtime.bigint() - saveStarted) / 1e9,
+        saveResult,
       );
       await redisCache?.del(boardsListCacheKey(localUserId, rows[0].folder_id));
       res.locals.auditDetails = { kind: "board_put" };
@@ -215,7 +236,9 @@ export function createBoardController(deps) {
       if (!auth) return;
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -244,7 +267,9 @@ export function createBoardController(deps) {
       if (!auth) return;
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -282,7 +307,9 @@ export function createBoardController(deps) {
       if (!auth) return;
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -290,12 +317,23 @@ export function createBoardController(deps) {
       }
       const { rows } = await pgQuery(
         `
+        WITH sess AS (
+          SELECT id, title, created_at, updated_at
+          FROM board_ai_chat_sessions
+          WHERE board_id = $1::bigint AND user_id = $2::bigint
+          ORDER BY updated_at DESC
+          LIMIT 100
+        )
         SELECT s.id, s.title, s.created_at, s.updated_at,
-          (SELECT COUNT(*)::int FROM board_ai_chat_messages m WHERE m.session_id = s.id) AS message_count
-        FROM board_ai_chat_sessions s
-        WHERE s.board_id = $1::bigint AND s.user_id = $2::bigint
+          COALESCE(mc.cnt, 0)::int AS message_count
+        FROM sess s
+        LEFT JOIN (
+          SELECT session_id, COUNT(*)::int AS cnt
+          FROM board_ai_chat_messages
+          WHERE session_id IN (SELECT id FROM sess)
+          GROUP BY session_id
+        ) mc ON mc.session_id = s.id
         ORDER BY s.updated_at DESC
-        LIMIT 100
         `,
         [boardId, localUserId],
       );
@@ -321,7 +359,9 @@ export function createBoardController(deps) {
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
       const sessionId = req.params.sessionId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -383,7 +423,9 @@ export function createBoardController(deps) {
       if (!auth) return;
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -420,7 +462,9 @@ export function createBoardController(deps) {
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
       const sessionId = req.params.sessionId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });
@@ -495,14 +539,15 @@ export function createBoardController(deps) {
         );
       });
       const { rows } = await pgQuery(
-        `SELECT id, title, created_at, updated_at FROM board_ai_chat_sessions WHERE id = $1::bigint`,
+        `
+        SELECT s.id, s.title, s.created_at, s.updated_at,
+          (SELECT COUNT(*)::int FROM board_ai_chat_messages m WHERE m.session_id = s.id) AS message_count
+        FROM board_ai_chat_sessions s
+        WHERE s.id = $1::bigint
+        `,
         [sessionId],
       );
       const r = rows[0];
-      const cnt = await pgQuery(
-        `SELECT COUNT(*)::int AS c FROM board_ai_chat_messages WHERE session_id = $1::bigint`,
-        [sessionId],
-      );
       res.locals.auditDetails = { kind: "board_ai_chat_put" };
       res.json({
         session: {
@@ -510,7 +555,10 @@ export function createBoardController(deps) {
           title: r.title,
           createdAt: r.created_at,
           updatedAt: r.updated_at,
-          messageCount: cnt.rows[0]?.c ?? 0,
+          messageCount:
+            typeof r.message_count === "bigint"
+              ? Number(r.message_count)
+              : Number(r.message_count) || 0,
         },
       });
     },
@@ -522,7 +570,9 @@ export function createBoardController(deps) {
       const localUserId = await upsertUserFromAuth(auth);
       const boardId = req.params.boardId;
       const sessionId = req.params.sessionId;
-      const board = await assertBoardOwned(boardId, localUserId);
+      const board = await assertBoardOwned(boardId, localUserId, {
+        includeSceneGzip: false,
+      });
       if (!board) {
         res.locals.auditError = "board not found";
         res.status(404).json({ message: "Board not found" });

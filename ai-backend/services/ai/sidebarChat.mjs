@@ -71,11 +71,7 @@ export function buildSidebarOpenAIMessages(trimmed, mode) {
 }
 
 function hasSidebarImageSearchCredentials() {
-  const hasSerp = Boolean(process.env.SERPAPI_API_KEY?.trim());
-  const hasGoogle =
-    Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
-    Boolean(process.env.GOOGLE_CX?.trim());
-  return hasSerp || hasGoogle;
+  return Boolean(process.env.SERPAPI_API_KEY?.trim());
 }
 
 function fallbackImageSearchQuery(trimmed) {

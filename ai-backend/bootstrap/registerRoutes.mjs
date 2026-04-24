@@ -5,6 +5,7 @@ import { createV1UserRoutes } from "../routes/v1UserRoutes.mjs";
 import { createV1WorkspaceRoutes } from "../routes/v1WorkspaceRoutes.mjs";
 
 export const routeManifest = [
+  "GET    /metrics",
   "GET    /health",
   "GET    /health/db",
   "POST   /api/v2/post",

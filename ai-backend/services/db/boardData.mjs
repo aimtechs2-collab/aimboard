@@ -1,5 +1,7 @@
 import { gunzipSync, gzipSync } from "node:zlib";
 
+import { recordWorkspaceCreated } from "../../utils/prometheus.mjs";
+
 const DEFAULT_SCENE_SOURCE = "https://aimtutor.ai";
 
 export function defaultEmptyScene() {
@@ -37,6 +39,7 @@ export function createOwnershipQueries({ pgQuery }) {
          RETURNING id, name, created_at, updated_at`,
         [localUserId],
       );
+      recordWorkspaceCreated();
       return ins.rows[0];
     },
 
@@ -63,11 +66,13 @@ export function createOwnershipQueries({ pgQuery }) {
       return rows[0] ?? null;
     },
 
-    async assertBoardOwned(boardId, localUserId) {
+    async assertBoardOwned(boardId, localUserId, opts = {}) {
       if (!/^\d+$/.test(String(boardId))) return null;
+      const { includeSceneGzip = true } = opts;
+      const sceneCol = includeSceneGzip ? "b.scene_gzip," : "";
       const { rows } = await pgQuery(
         `
-        SELECT b.id, b.folder_id, b.title, b.scene_gzip, b.created_by_user_id, b.created_at, b.updated_at
+        SELECT b.id, b.folder_id, b.title, ${sceneCol} b.created_by_user_id, b.created_at, b.updated_at
         FROM boards b
         JOIN folders f ON f.id = b.folder_id
         JOIN workspaces w ON w.id = f.workspace_id

@@ -1,6 +1,5 @@
 export function createAuditV1Middleware({ getAuth, pgQuery }) {
   async function logProcessEntry({
-    userId,
     clerkUserId,
     route,
     method,
@@ -21,10 +20,12 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
           user_id, clerk_user_id, route, http_method, status_code, duration_ms,
           client_ip, user_agent, error_message, details
         )
-        VALUES ($1::bigint, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb);
+        VALUES (
+          (SELECT id FROM users WHERE clerk_user_id = $1 LIMIT 1),
+          $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb
+        );
       `,
         [
-          userId,
           clerkUserId,
           route,
           method,
@@ -41,12 +42,15 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
     }
   }
 
-  async function touchUserLastApi(userId) {
-    if (!userId || !process.env.NEON_DATABASE_URL) {
+  async function touchUserLastApiByClerk(clerkUserId) {
+    if (!clerkUserId || !process.env.NEON_DATABASE_URL) {
       return;
     }
     try {
-      await pgQuery(`UPDATE users SET last_api_at = NOW() WHERE id = $1::bigint`, [userId]);
+      await pgQuery(
+        `UPDATE users SET last_api_at = NOW() WHERE clerk_user_id = $1`,
+        [clerkUserId],
+      );
     } catch (err) {
       console.error("[audit] touchUserLastApi failed", err);
     }
@@ -73,19 +77,6 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
       const clerkUserId = auth?.userId ?? null;
 
       void (async () => {
-        let localUserId = null;
-        if (clerkUserId) {
-          try {
-            const r = await pgQuery(
-              `SELECT id FROM users WHERE clerk_user_id = $1 LIMIT 1`,
-              [clerkUserId],
-            );
-            localUserId = r.rows[0]?.id ?? null;
-          } catch (e) {
-            console.error("[audit] user lookup failed", e);
-          }
-        }
-
         const xf = req.headers["x-forwarded-for"];
         const clientIp =
           (typeof xf === "string" ? xf.split(",")[0]?.trim() : null) ||
@@ -104,7 +95,6 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
         }
 
         await logProcessEntry({
-          userId: localUserId,
           clerkUserId,
           route: pathOnly,
           method: req.method,
@@ -116,8 +106,8 @@ export function createAuditV1Middleware({ getAuth, pgQuery }) {
           details,
         });
 
-        if (localUserId && statusCode < 500) {
-          await touchUserLastApi(localUserId);
+        if (clerkUserId && statusCode < 500) {
+          await touchUserLastApiByClerk(clerkUserId);
         }
       })();
     };

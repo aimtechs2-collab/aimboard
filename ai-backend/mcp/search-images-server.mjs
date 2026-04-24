@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * MCP server exposing `search_images` for Cursor / other MCP clients.
- * Loads the same Unsplash logic as the AimTutor ai-backend chat tool.
+ * Loads the same SerpAPI image-search logic as the AimTutor ai-backend chat tool.
  *
  * Run: node mcp/search-images-server.mjs
- * Env: UNSPLASH_ACCESS_KEY (required for live results; empty returns [])
+ * Env: SERPAPI_API_KEY (required for live results; empty returns [])
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { searchImages } from "../lib/searchImages.mjs";
+import { fetchImagesWithMeta } from "../lib/googleImageSearch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +26,7 @@ server.registerTool(
   "search_images",
   {
     description:
-      "Search Unsplash for relevant reference images (diagrams, places, objects, science). Returns 3–5 HTTPS image URLs with short alt text.",
+      "Search web images (SerpAPI Google Images) for relevant references. Returns up to 5 HTTPS image URLs with short alt text.",
     inputSchema: {
       query: z
         .string()
@@ -36,8 +36,8 @@ server.registerTool(
     },
   },
   async ({ query }) => {
-    const images = await searchImages({ query, max: 5 });
-    const text = JSON.stringify(images);
+    const { items } = await fetchImagesWithMeta({ query, maxImages: 5 });
+    const text = JSON.stringify(items);
     return {
       content: [{ type: "text", text }],
     };

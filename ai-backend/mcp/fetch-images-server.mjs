@@ -3,7 +3,7 @@
  * MCP server exposing `fetch_images` (web image search for diagrams / visuals).
  *
  * Run: node mcp/fetch-images-server.mjs
- * Env: SERPAPI_API_KEY (preferred) or GOOGLE_API_KEY + GOOGLE_CX
+ * Env: SERPAPI_API_KEY
  * Query expansion: template suffixes only (no OpenAI in this process).
  */
 import path from "node:path";
@@ -26,7 +26,7 @@ server.registerTool(
   "fetch_images",
   {
     description:
-      "Search the web for diagrams, illustrations, and educational images (SerpAPI Google Images when configured, else Google Custom Search). Returns up to 4 HTTPS image URLs.",
+      "Search the web for diagrams, illustrations, and educational images (SerpAPI Google Images). Returns up to 4 HTTPS image URLs.",
     inputSchema: {
       query: z
         .string()

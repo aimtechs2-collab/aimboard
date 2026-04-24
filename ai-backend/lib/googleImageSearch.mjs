@@ -1,7 +1,6 @@
 /**
- * Image search for tutor reference visuals: SerpAPI (Google Images) when
- * SERPAPI_API_KEY is set, otherwise Google Custom Search JSON API.
- * Used by Express sidebar chat and MCP fetch_images.
+ * Image search for tutor reference visuals via SerpAPI (Google Images).
+ * Used by Express sidebar chat and MCP fetch_images/search_images.
  */
 
 import { templateFallbackQueries } from "./imageQueryOpenAI.mjs";
@@ -11,7 +10,6 @@ const imgLog = logger.child({ module: "imageSearch" });
 
 const SERPAPI_ENDPOINT =
   process.env.SERPAPI_ENDPOINT?.trim() || "https://serpapi.com/search.json";
-const GOOGLE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
 const CACHE_TTL_MS = 3_600_000;
 const cache = new Map();
 
@@ -202,81 +200,8 @@ async function searchSerpImagesOneQuery(query, num) {
   }
 }
 
-/**
- * @param {string} query
- * @param {number} num
- * @returns {Promise<Array<{ link: string; title: string; snippet: string }>>}
- */
-async function searchGoogleImagesOneQuery(query, num) {
-  const key = process.env.GOOGLE_API_KEY?.trim();
-  const cx = process.env.GOOGLE_CX?.trim();
-  if (!key || !cx || !query) {
-    return [];
-  }
-
-  const url = new URL(GOOGLE_ENDPOINT);
-  url.searchParams.set("key", key);
-  url.searchParams.set("cx", cx);
-  url.searchParams.set("q", query);
-  url.searchParams.set("searchType", "image");
-  url.searchParams.set("num", String(Math.min(Math.max(1, num), 10)));
-
-  try {
-    const res = await fetch(url.toString(), {
-      signal: AbortSignal.timeout(12_000),
-    });
-    const data = await res.json().catch(() => ({}));
-
-    if (data.error) {
-      const msg =
-        data.error.message ||
-        data.error.errors?.map((e) => e.message).join("; ") ||
-        JSON.stringify(data.error);
-      imgLog.warn(
-        { status: res.status, query: query.slice(0, 120) },
-        msg.slice(0, 500),
-      );
-      return [];
-    }
-
-    if (!res.ok) {
-      imgLog.warn(
-        { status: res.status, query: query.slice(0, 120) },
-        "Custom Search HTTP error",
-      );
-      return [];
-    }
-
-    const items = Array.isArray(data.items) ? data.items : [];
-    if (
-      items.length === 0 &&
-      process.env.NODE_ENV !== "production" &&
-      data.searchInformation
-    ) {
-      imgLog.debug(
-        {
-          totalResults: data.searchInformation.totalResults,
-          query: query.slice(0, 120),
-        },
-        "Custom Search returned no items",
-      );
-    }
-    return items.map((item) => ({
-      link: String(item.link || ""),
-      title: String(item.title || ""),
-      snippet: String(item.snippet || ""),
-    }));
-  } catch (err) {
-    imgLog.warn({ err }, "Custom Search request failed");
-    return [];
-  }
-}
-
 async function searchImagesOneQuery(query, num) {
-  if (process.env.SERPAPI_API_KEY?.trim()) {
-    return searchSerpImagesOneQuery(query, num);
-  }
-  return searchGoogleImagesOneQuery(query, num);
+  return searchSerpImagesOneQuery(query, num);
 }
 
 /**
@@ -327,8 +252,7 @@ function mergeRoundRobin(resultArrays, maxTotal, mode = "strict") {
 }
 
 function cacheKey(queries, maxImages) {
-  const provider = process.env.SERPAPI_API_KEY?.trim() ? "serp" : "google";
-  return `${provider}\u0000${[...queries].sort().join("\u0001")}\u0000${maxImages}`;
+  return `serp\u0000${[...queries].sort().join("\u0001")}\u0000${maxImages}`;
 }
 
 function pruneCache() {
@@ -381,10 +305,7 @@ export async function fetchImagesWithMetaFromQueries(
   const primaryForRetry = queries[0] || "reference";
 
   const hasSerp = Boolean(process.env.SERPAPI_API_KEY?.trim());
-  const hasGoogle =
-    Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
-    Boolean(process.env.GOOGLE_CX?.trim());
-  if (!hasSerp && !hasGoogle) {
+  if (!hasSerp) {
     return { items: [] };
   }
   if (queries.length === 0) {

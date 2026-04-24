@@ -1,3 +1,9 @@
+import {
+  observeAiGenerationSeconds,
+  observeOpenAiSeconds,
+  recordAiGenerationFailure,
+} from "../utils/prometheus.mjs";
+
 export function createAiController(deps) {
   const {
     requireDatabase,
@@ -30,6 +36,7 @@ export function createAiController(deps) {
       if (!auth) return;
       if (!requireAiProvider(res, "ollama")) return;
       const localUserId = await upsertUserFromAuth(auth);
+      const genStart = process.hrtime.bigint();
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
@@ -58,8 +65,21 @@ export function createAiController(deps) {
           endpoint: "/v1/ai/ollama/models",
           model: "ollama:tags",
         });
+        observeAiGenerationSeconds(
+          "ollama_models",
+          "ollama",
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          true,
+        );
         res.json({ models: names });
       } catch (err) {
+        observeAiGenerationSeconds(
+          "ollama_models",
+          "ollama",
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          false,
+        );
+        recordAiGenerationFailure("ollama_models", "ollama");
         res.locals.auditError = err?.message || "Failed to load ollama models";
         res.status(500).json({ message: publicErrorMessage(err) });
       }
@@ -94,6 +114,7 @@ export function createAiController(deps) {
         res.write(`data: ${JSON.stringify(obj)}\n\n`);
       };
 
+      const genStart = process.hrtime.bigint();
       try {
         const normalizedMessages = [
           { role: "system", content: MERMAID_SYSTEM },
@@ -131,6 +152,7 @@ export function createAiController(deps) {
             }
           }
         } else {
+          const tOpenAi = process.hrtime.bigint();
           const stream = await openai.chat.completions.create({
             model,
             stream: true,
@@ -145,6 +167,10 @@ export function createAiController(deps) {
               emittedContent = true;
             }
           }
+          observeOpenAiSeconds(
+            "text_to_diagram_stream",
+            Number(process.hrtime.bigint() - tOpenAi) / 1e9,
+          );
         }
 
         await logUsage({
@@ -164,10 +190,23 @@ export function createAiController(deps) {
           messageCount: messages.length,
         };
 
+        observeAiGenerationSeconds(
+          "text_to_diagram_stream",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          true,
+        );
         sendSse({ type: "done", finishReason: "stop" });
         res.write("data: [DONE]\n\n");
         res.end();
       } catch (err) {
+        observeAiGenerationSeconds(
+          "text_to_diagram_stream",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          false,
+        );
+        recordAiGenerationFailure("text_to_diagram_stream", provider);
         const internal = err?.message || "OpenAI request failed";
         res.locals.auditError = internal;
         res.locals.auditDetails = {
@@ -231,6 +270,7 @@ export function createAiController(deps) {
       };
 
       const mode = parseSidebarChatMode(req.body);
+      const genStart = process.hrtime.bigint();
 
       try {
         let promptTokens = null;
@@ -268,6 +308,12 @@ export function createAiController(deps) {
             promptTokens,
             completionTokens,
           };
+          observeAiGenerationSeconds(
+            "sidebar_stream",
+            provider,
+            Number(process.hrtime.bigint() - genStart) / 1e9,
+            true,
+          );
           sendSse({ type: "done", finishReason: "stop" });
           res.write("data: [DONE]\n\n");
           res.end();
@@ -318,6 +364,7 @@ export function createAiController(deps) {
             }
           }
         } else {
+          const tOpenAi = process.hrtime.bigint();
           const stream = await openai.chat.completions.create({
             model,
             stream: true,
@@ -339,6 +386,10 @@ export function createAiController(deps) {
               emittedContent = true;
             }
           }
+          observeOpenAiSeconds(
+            "sidebar_stream",
+            Number(process.hrtime.bigint() - tOpenAi) / 1e9,
+          );
         }
 
         const { expansionUsage: imageExpansionUsage } = await imageJob;
@@ -364,10 +415,23 @@ export function createAiController(deps) {
           promptTokens,
           completionTokens,
         };
+        observeAiGenerationSeconds(
+          "sidebar_stream",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          true,
+        );
         sendSse({ type: "done", finishReason: "stop" });
         res.write("data: [DONE]\n\n");
         res.end();
       } catch (err) {
+        observeAiGenerationSeconds(
+          "sidebar_stream",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          false,
+        );
+        recordAiGenerationFailure("sidebar_stream", provider);
         res.locals.auditError = err?.message || "sidebar chat stream failed";
         res.locals.auditDetails = {
           kind: "ai_sidebar_chat_stream",
@@ -418,6 +482,7 @@ export function createAiController(deps) {
       const model = parseAiModel(req.body, provider, MODEL);
       const mode = parseSidebarChatMode(req.body);
       const openai = provider === "openai" ? createOpenAIClient() : null;
+      const genStart = process.hrtime.bigint();
       try {
         if (mode === "images") {
           const pipelineResult = await runSidebarImagePipeline({
@@ -448,6 +513,12 @@ export function createAiController(deps) {
             messageCount: trimmed.length,
             mode,
           };
+          observeAiGenerationSeconds(
+            "sidebar",
+            provider,
+            Number(process.hrtime.bigint() - genStart) / 1e9,
+            true,
+          );
           res.json({ text: "", images, reply: "" });
           return;
         }
@@ -472,12 +543,20 @@ export function createAiController(deps) {
                 maxTokens: 2048,
                 temperature: 0.7,
               })
-            : openai.chat.completions.create({
-                model,
-                messages: openaiMessages,
-                max_tokens: 2048,
-                temperature: 0.7,
-              }),
+            : (async () => {
+                const t0 = process.hrtime.bigint();
+                const r = await openai.chat.completions.create({
+                  model,
+                  messages: openaiMessages,
+                  max_tokens: 2048,
+                  temperature: 0.7,
+                });
+                observeOpenAiSeconds(
+                  "sidebar",
+                  Number(process.hrtime.bigint() - t0) / 1e9,
+                );
+                return r;
+              })(),
         ]);
         const images = pipelineResult.items;
         let promptTokens = pipelineResult.expansionUsage
@@ -511,8 +590,21 @@ export function createAiController(deps) {
           messageCount: trimmed.length,
           mode,
         };
+        observeAiGenerationSeconds(
+          "sidebar",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          true,
+        );
         res.json({ text: reply, images, reply });
       } catch (err) {
+        observeAiGenerationSeconds(
+          "sidebar",
+          provider,
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          false,
+        );
+        recordAiGenerationFailure("sidebar", provider);
         res.locals.auditError = err?.message || "sidebar chat failed";
         res.status(500).json({ message: publicErrorMessage(err) });
       }
@@ -560,7 +652,9 @@ export function createAiController(deps) {
         "You generate a single self-contained HTML document (only HTML, no markdown) that implements the UI or diagram described. Use inline CSS. Theme hint: " +
         String(theme ?? "light");
 
+      const genStart = process.hrtime.bigint();
       try {
+        const tOpenAi = process.hrtime.bigint();
         const completion = await openai.chat.completions.create({
           model,
           messages: [
@@ -583,10 +677,21 @@ export function createAiController(deps) {
           ],
           max_tokens: 4096,
         });
+        observeOpenAiSeconds(
+          "diagram_to_code",
+          Number(process.hrtime.bigint() - tOpenAi) / 1e9,
+        );
 
         let html = completion.choices[0]?.message?.content?.trim() ?? "";
         html = html.replace(/^```html\s*/i, "").replace(/\s*```$/i, "");
         if (!html) {
+          observeAiGenerationSeconds(
+            "diagram_to_code",
+            "openai",
+            Number(process.hrtime.bigint() - genStart) / 1e9,
+            false,
+          );
+          recordAiGenerationFailure("diagram_to_code", "openai");
           res.locals.auditError = "Empty model response";
           res.status(500).json({ message: "Empty model response" });
           return;
@@ -608,8 +713,21 @@ export function createAiController(deps) {
           textLength: textBlock.length,
           canvasContext: canvasContext != null,
         };
+        observeAiGenerationSeconds(
+          "diagram_to_code",
+          "openai",
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          true,
+        );
         res.json({ html });
       } catch (err) {
+        observeAiGenerationSeconds(
+          "diagram_to_code",
+          "openai",
+          Number(process.hrtime.bigint() - genStart) / 1e9,
+          false,
+        );
+        recordAiGenerationFailure("diagram_to_code", "openai");
         res.locals.auditError = err?.message || "diagram-to-code failed";
         res.locals.auditDetails = {
           kind: "ai_diagram_to_code",

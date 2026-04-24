@@ -16,6 +16,7 @@ import { getPrisma, pgQuery as prismaPgQuery } from "./db/prismaClient.mjs";
 import { isAllowedChatImageUrl } from "./lib/googleImageSearch.mjs";
 import { logger } from "./lib/logger.mjs";
 import { createAuditV1Middleware } from "./middleware/auditV1.mjs";
+import { createHttpMetricsMiddleware } from "./middleware/metrics.mjs";
 import { attachRealtimeServer } from "./realtime/socketServer.mjs";
 import { createAiProviderService } from "./services/ai/providerService.mjs";
 import {
@@ -32,6 +33,11 @@ import {
 } from "./services/ai/sidebarChat.mjs";
 import { createRedisCache } from "./services/cache/redisCache.mjs";
 import { createDbHealthMonitor } from "./services/db/healthMonitor.mjs";
+import { registerMetricsRoute } from "./routes/metricsRoute.mjs";
+import {
+  initPrometheusDefaultMetrics,
+  recordOpenAiTokens,
+} from "./utils/prometheus.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -44,6 +50,7 @@ dotenv.config({ path: path.join(repoRoot, ".env") });
 dotenv.config({ path: path.join(__dirname, ".env.development.local") });
 dotenv.config({ path: path.join(__dirname, ".env.local") });
 dotenv.config({ path: path.join(__dirname, ".env") });
+initPrometheusDefaultMetrics();
 const prisma = getPrisma();
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -98,12 +105,9 @@ if (isProduction && clerkAuthorizedParties.length === 0) {
 }
 
 const hasSerpImageKey = Boolean(process.env.SERPAPI_API_KEY?.trim());
-const hasGoogleImageKeys =
-  Boolean(process.env.GOOGLE_API_KEY?.trim()) &&
-  Boolean(process.env.GOOGLE_CX?.trim());
-if (!hasSerpImageKey && !hasGoogleImageKeys) {
+if (!hasSerpImageKey) {
   logger.warn(
-    "No image search credentials: set SERPAPI_API_KEY (SerpAPI Google Images) or GOOGLE_API_KEY + GOOGLE_CX (Custom Search).",
+    "No image search credentials: set SERPAPI_API_KEY (SerpAPI Google Images).",
   );
 }
 
@@ -263,6 +267,8 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "32mb" }));
+registerMetricsRoute(app, { logger });
+app.use(createHttpMetricsMiddleware());
 app.use((req, res, next) => {
   const startedAt = Date.now();
   res.on("finish", () => {
@@ -301,8 +307,8 @@ const boardPutLimiter = rateLimit({
 });
 
 app.use((req, res, next) => {
-  // allow public routes
-  if (req.path.startsWith("/health")) {
+  // allow public routes (metrics: optional bearer — see METRICS_SCRAPE_TOKEN)
+  if (req.path.startsWith("/health") || req.path === "/metrics") {
     return next();
   }
 
@@ -373,6 +379,7 @@ async function logUsage({
     `,
       [userId, endpoint, model, promptTokens, completionTokens],
     );
+    recordOpenAiTokens(endpoint, promptTokens, completionTokens, model);
   } catch (err) {
     logger.warn(
       { err, endpoint, module: "logUsage" },
