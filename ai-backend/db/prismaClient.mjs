@@ -63,7 +63,7 @@ export function getPrisma() {
   }
   const stripped = stripChannelBindingFromConnectionString(process.env.NEON_DATABASE_URL);
   const datasourceUrl = stripped ? finalizeDatabaseUrlForPrisma(stripped) : stripped;
-  prismaInstance = new PrismaClient({
+  const base = new PrismaClient({
     datasources: datasourceUrl
       ? {
           db: {
@@ -72,40 +72,82 @@ export function getPrisma() {
         }
       : undefined,
   });
-  prismaInstance.$use(async (params, next) => {
-    const start = process.hrtime.bigint();
-    const model = String(params.model ?? "$other");
-    const action = String(params.action ?? "unknown");
-    try {
-      const result = await next(params);
-      observePrismaQuerySeconds(
-        model,
-        action,
-        Number(process.hrtime.bigint() - start) / 1e9,
-        false,
-      );
-      return result;
-    } catch (err) {
-      observePrismaQuerySeconds(
-        model,
-        action,
-        Number(process.hrtime.bigint() - start) / 1e9,
-        true,
-      );
-      throw err;
-    }
+  // Prisma 6: client middleware `$use` is not available; use Client Extensions instead.
+  prismaInstance = base.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          const start = process.hrtime.bigint();
+          const modelLabel = String(model ?? "unknown");
+          const actionLabel = String(operation ?? "unknown");
+          try {
+            const result = await query(args);
+            observePrismaQuerySeconds(
+              modelLabel,
+              actionLabel,
+              Number(process.hrtime.bigint() - start) / 1e9,
+              false,
+            );
+            return result;
+          } catch (err) {
+            observePrismaQuerySeconds(
+              modelLabel,
+              actionLabel,
+              Number(process.hrtime.bigint() - start) / 1e9,
+              true,
+            );
+            throw err;
+          }
+        },
+      },
+    },
   });
   return prismaInstance;
 }
 
 export async function pgQuery(text, params = []) {
-  const rows = await getPrisma().$queryRawUnsafe(text, ...(params || []));
-  return {
-    rows: Array.isArray(rows) ? rows : [],
-    rowCount: Array.isArray(rows) ? rows.length : 0,
-  };
+  const start = process.hrtime.bigint();
+  try {
+    const rows = await getPrisma().$queryRawUnsafe(text, ...(params || []));
+    observePrismaQuerySeconds(
+      "raw_sql",
+      "queryRawUnsafe",
+      Number(process.hrtime.bigint() - start) / 1e9,
+      false,
+    );
+    return {
+      rows: Array.isArray(rows) ? rows : [],
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+    };
+  } catch (err) {
+    observePrismaQuerySeconds(
+      "raw_sql",
+      "queryRawUnsafe",
+      Number(process.hrtime.bigint() - start) / 1e9,
+      true,
+    );
+    throw err;
+  }
 }
 
 export async function pgExecute(text, params = []) {
-  return getPrisma().$executeRawUnsafe(text, ...(params || []));
+  const start = process.hrtime.bigint();
+  try {
+    const n = await getPrisma().$executeRawUnsafe(text, ...(params || []));
+    observePrismaQuerySeconds(
+      "raw_sql",
+      "executeRawUnsafe",
+      Number(process.hrtime.bigint() - start) / 1e9,
+      false,
+    );
+    return n;
+  } catch (err) {
+    observePrismaQuerySeconds(
+      "raw_sql",
+      "executeRawUnsafe",
+      Number(process.hrtime.bigint() - start) / 1e9,
+      true,
+    );
+    throw err;
+  }
 }
