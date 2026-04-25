@@ -123,6 +123,10 @@ import {
 } from "./data";
 
 import { updateStaleImageStatuses } from "./data/FileManager";
+import {
+  loadBundledIconLibraryItems,
+  mergeBundledIconLibraryItems,
+} from "./data/bundledIconLibraries";
 import { FileStatusStore } from "./data/fileStatusStore";
 import {
   importFromLocalStorage,
@@ -619,6 +623,32 @@ const ExcalidrawWrapper = () => {
     // TODO maybe remove this in several months (shipped: 24-03-11)
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    let isMounted = true;
+
+    loadBundledIconLibraryItems()
+      .then((libraryItems) => {
+        if (!isMounted || libraryItems.length === 0) {
+          return;
+        }
+        excalidrawAPI.updateLibrary({
+          libraryItems: (currentLibraryItems) =>
+            mergeBundledIconLibraryItems(currentLibraryItems, libraryItems),
+        });
+      })
+      .catch((error) => {
+        console.warn("Failed to load bundled Excalidraw icon libraries", error);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [excalidrawAPI]);
 
   const [, forceRefresh] = useState(false);
 

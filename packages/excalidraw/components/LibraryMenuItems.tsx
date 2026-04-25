@@ -18,7 +18,6 @@ import { useLibraryCache } from "../hooks/useLibraryItemSvg";
 import { useScrollPosition } from "../hooks/useScrollPosition";
 import { t } from "../i18n";
 
-import { LibraryMenuControlButtons } from "./LibraryMenuControlButtons";
 import { LibraryDropdownMenu } from "./LibraryMenuHeaderContent";
 import {
   LibraryMenuSection,
@@ -38,12 +37,7 @@ import { Button } from "./Button";
 
 import type { ExcalidrawLibraryIds } from "../data/types";
 
-import type {
-  ExcalidrawProps,
-  LibraryItem,
-  LibraryItems,
-  UIAppState,
-} from "../types";
+import type { LibraryItem, LibraryItems } from "../types";
 
 // using an odd number of items per batch so the rendering creates an irregular
 // pattern which looks more organic
@@ -58,9 +52,6 @@ export default function LibraryMenuItems({
   onAddToLibrary,
   onInsertLibraryItems,
   pendingElements,
-  theme,
-  id,
-  libraryReturnUrl,
   onSelectItems,
   selectedItems,
 }: {
@@ -69,9 +60,6 @@ export default function LibraryMenuItems({
   pendingElements: LibraryItem["elements"];
   onInsertLibraryItems: (libraryItems: LibraryItems) => void;
   onAddToLibrary: (elements: LibraryItem["elements"]) => void;
-  libraryReturnUrl: ExcalidrawProps["libraryReturnUrl"];
-  theme: UIAppState["theme"];
-  id: string;
   selectedItems: LibraryItem["id"][];
   onSelectItems: (id: LibraryItem["id"][]) => void;
 }) {
@@ -115,6 +103,38 @@ export default function LibraryMenuItems({
     () => libraryItems.filter((item) => item.status !== "published"),
     [libraryItems],
   );
+
+  const getBundledCategory = useCallback((item: LibraryItem): string | null => {
+    const name = item.name || "";
+    const markerMatch = name.match(/\|\s*#cat:([^|]+)/);
+    if (markerMatch?.[1]) {
+      return markerMatch[1].trim();
+    }
+    const prefixMatch = name.match(/^\s*\[cat:([^\]]+)\]/i);
+    return prefixMatch?.[1]?.trim() || null;
+  }, []);
+
+  const { uncategorizedUnpublished, categorizedUnpublished } = useMemo(() => {
+    const grouped = new Map<string, LibraryItem[]>();
+    const uncategorized: LibraryItem[] = [];
+    for (const item of unpublishedItems) {
+      const category = getBundledCategory(item);
+      if (!category) {
+        uncategorized.push(item);
+        continue;
+      }
+      const existing = grouped.get(category);
+      if (existing) {
+        existing.push(item);
+      } else {
+        grouped.set(category, [item]);
+      }
+    }
+    return {
+      uncategorizedUnpublished: uncategorized,
+      categorizedUnpublished: Array.from(grouped.entries()),
+    };
+  }, [getBundledCategory, unpublishedItems]);
 
   const publishedItems = useMemo(
     () => libraryItems.filter((item) => item.status === "published"),
@@ -291,16 +311,49 @@ export default function LibraryMenuItems({
               svgCache={svgCache}
             />
           )}
-          <LibraryMenuSection
-            itemsRenderedPerBatch={itemsRenderedPerBatch}
-            items={unpublishedItems}
-            onItemSelectToggle={onItemSelectToggle}
-            onItemDrag={onItemDrag}
-            onClick={onItemClick}
-            isItemSelected={isItemSelected}
-            svgCache={svgCache}
-          />
         </LibraryMenuSectionGrid>
+      )}
+
+      {categorizedUnpublished.map(([categoryName, items], index) => (
+        <React.Fragment key={categoryName}>
+          {index > 0 && <div className="library-menu-items-container__divider" />}
+          <div className="library-menu-items-container__subheader">
+            {categoryName}
+          </div>
+          <LibraryMenuSectionGrid>
+            <LibraryMenuSection
+              itemsRenderedPerBatch={itemsRenderedPerBatch}
+              items={items}
+              onItemSelectToggle={onItemSelectToggle}
+              onItemDrag={onItemDrag}
+              onClick={onItemClick}
+              isItemSelected={isItemSelected}
+              svgCache={svgCache}
+            />
+          </LibraryMenuSectionGrid>
+        </React.Fragment>
+      ))}
+
+      {uncategorizedUnpublished.length > 0 && (
+        <>
+          {categorizedUnpublished.length > 0 && (
+            <div className="library-menu-items-container__divider" />
+          )}
+          <div className="library-menu-items-container__subheader">
+            My items
+          </div>
+          <LibraryMenuSectionGrid>
+            <LibraryMenuSection
+              itemsRenderedPerBatch={itemsRenderedPerBatch}
+              items={uncategorizedUnpublished}
+              onItemSelectToggle={onItemSelectToggle}
+              onItemDrag={onItemDrag}
+              onClick={onItemClick}
+              isItemSelected={isItemSelected}
+              svgCache={svgCache}
+            />
+          </LibraryMenuSectionGrid>
+        </>
       )}
 
       {publishedItems.length > 0 && (
@@ -431,14 +484,6 @@ export default function LibraryMenuItems({
         {JSX_whenNotSearching}
         {JSX_whenSearching}
 
-        {IS_LIBRARY_EMPTY && (
-          <LibraryMenuControlButtons
-            style={{ padding: "16px 0", width: "100%" }}
-            id={id}
-            libraryReturnUrl={libraryReturnUrl}
-            theme={theme}
-          />
-        )}
       </Stack.Col>
     </div>
   );

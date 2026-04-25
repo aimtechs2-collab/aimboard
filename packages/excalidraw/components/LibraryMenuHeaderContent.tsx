@@ -12,7 +12,6 @@ import { useLibraryCache } from "../hooks/useLibraryItemSvg";
 import { t } from "../i18n";
 
 import { useApp, useExcalidrawSetAppState } from "./App";
-import ConfirmDialog from "./ConfirmDialog";
 import { Dialog } from "./Dialog";
 import { isLibraryMenuOpenAtom } from "./LibraryMenu";
 import PublishLibrary from "./PublishLibrary";
@@ -24,7 +23,6 @@ import {
   ExportIcon,
   LoadIcon,
   publishIcon,
-  TrashIcon,
 } from "./icons";
 
 import type Library from "../data/library";
@@ -40,7 +38,6 @@ export const LibraryDropdownMenuButton: React.FC<{
   selectedItems: LibraryItem["id"][];
   library: Library;
   onRemoveFromLibrary: () => void;
-  resetLibrary: () => void;
   onSelectItems: (items: LibraryItem["id"][]) => void;
   appState: UIAppState;
   className?: string;
@@ -49,7 +46,6 @@ export const LibraryDropdownMenuButton: React.FC<{
   selectedItems,
   library,
   onRemoveFromLibrary,
-  resetLibrary,
   onSelectItems,
   appState,
   className,
@@ -59,44 +55,12 @@ export const LibraryDropdownMenuButton: React.FC<{
     isLibraryMenuOpenAtom,
   );
 
-  const renderRemoveLibAlert = () => {
-    const content = selectedItems.length
-      ? t("alerts.removeItemsFromsLibrary", { count: selectedItems.length })
-      : t("alerts.resetLibrary");
-    const title = selectedItems.length
-      ? t("confirmDialog.removeItemsFromLib")
-      : t("confirmDialog.resetLibrary");
-    return (
-      <ConfirmDialog
-        onConfirm={() => {
-          if (selectedItems.length) {
-            onRemoveFromLibrary();
-          } else {
-            resetLibrary();
-          }
-          setShowRemoveLibAlert(false);
-        }}
-        onCancel={() => {
-          setShowRemoveLibAlert(false);
-        }}
-        title={title}
-      >
-        <p>{content}</p>
-      </ConfirmDialog>
-    );
-  };
-
-  const [showRemoveLibAlert, setShowRemoveLibAlert] = useState(false);
-
   const itemsSelected = !!selectedItems.length;
   const items = itemsSelected
     ? libraryItemsData.libraryItems.filter((item) =>
         selectedItems.includes(item.id),
       )
     : libraryItemsData.libraryItems;
-  const resetLabel = itemsSelected
-    ? t("buttons.remove")
-    : t("buttons.resetLibrary");
 
   const [showPublishLibraryDialog, setShowPublishLibraryDialog] =
     useState(false);
@@ -229,14 +193,6 @@ export const LibraryDropdownMenuButton: React.FC<{
               {t("buttons.publishLibrary")}
             </DropdownMenu.Item>
           )}
-          {!!items.length && (
-            <DropdownMenu.Item
-              onSelect={() => setShowRemoveLibAlert(true)}
-              icon={TrashIcon}
-            >
-              {resetLabel}
-            </DropdownMenu.Item>
-          )}
         </DropdownMenu.Content>
       </DropdownMenu>
     );
@@ -248,7 +204,6 @@ export const LibraryDropdownMenuButton: React.FC<{
       {selectedItems.length > 0 && (
         <div className="library-actions-counter">{selectedItems.length}</div>
       )}
-      {showRemoveLibAlert && renderRemoveLibAlert()}
       {showPublishLibraryDialog && (
         <PublishLibrary
           onClose={() => setShowPublishLibraryDialog(false)}
@@ -284,7 +239,7 @@ export const LibraryDropdownMenu = ({
   className?: string;
 }) => {
   const { library } = useApp();
-  const { clearLibraryCache, deleteItemsFromLibraryCache } = useLibraryCache();
+  const { deleteItemsFromLibraryCache } = useLibraryCache();
   const appState = useUIAppState();
   const setAppState = useExcalidrawSetAppState();
 
@@ -303,11 +258,6 @@ export const LibraryDropdownMenu = ({
     onSelectItems([]);
   };
 
-  const resetLibrary = () => {
-    library.resetLibrary();
-    clearLibraryCache();
-  };
-
   return (
     <LibraryDropdownMenuButton
       appState={appState}
@@ -318,7 +268,6 @@ export const LibraryDropdownMenu = ({
       onRemoveFromLibrary={() =>
         removeFromLibrary(libraryItemsData.libraryItems)
       }
-      resetLibrary={resetLibrary}
       className={className}
     />
   );

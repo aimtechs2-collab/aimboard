@@ -15,6 +15,7 @@ import type { SvgCache } from "../hooks/useLibraryItemSvg";
 export const LibraryUnit = memo(
   ({
     id,
+    name,
     elements,
     isPending,
     onClick,
@@ -24,6 +25,7 @@ export const LibraryUnit = memo(
     svgCache,
   }: {
     id: LibraryItem["id"] | /** for pending item */ null;
+    name?: LibraryItem["name"];
     elements?: LibraryItem["elements"];
     isPending?: boolean;
     onClick: (id: LibraryItem["id"] | null) => void;
@@ -37,6 +39,7 @@ export const LibraryUnit = memo(
 
     const [isHovered, setIsHovered] = useState(false);
     const isMobile = useEditorInterface().formFactor === "phone";
+    const displayName = name?.split("|")[0]?.trim() || "";
     const adder = isPending && (
       <div className="library-unit__adder">{PlusIcon}</div>
     );
@@ -51,6 +54,8 @@ export const LibraryUnit = memo(
         })}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        title={displayName}
+        aria-label={displayName || undefined}
       >
         <div
           className={clsx("library-unit__dragger", {
@@ -85,6 +90,11 @@ export const LibraryUnit = memo(
             onChange={(checked, event) => onToggle(id, event)}
             className="library-unit__checkbox"
           />
+        )}
+        {displayName && (
+          <div className="library-unit__name" aria-hidden="true">
+            {displayName}
+          </div>
         )}
       </div>
     );

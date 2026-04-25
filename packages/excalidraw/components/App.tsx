@@ -4457,17 +4457,9 @@ class App extends React.Component<AppProps, AppState> {
     this.setState(
       {
         ...this.state,
-        // keep sidebar (presumably the library) open if it's docked and
-        // can fit.
-        //
-        // Note, we should close the sidebar only if we're dropping items
-        // from library, not when pasting from clipboard. Alas.
-        openSidebar:
-          this.state.openSidebar &&
-          this.editorInterface.canFitSidebar &&
-          editorJotaiStore.get(isSidebarDockedAtom)
-            ? this.state.openSidebar
-            : null,
+        // Keep the sidebar open after inserting/dragging library items.
+        // The host app controls explicit close via the sidebar "X" button.
+        openSidebar: this.state.openSidebar,
         ...selectGroupsForSelectedElements(
           {
             editingGroupId: null,

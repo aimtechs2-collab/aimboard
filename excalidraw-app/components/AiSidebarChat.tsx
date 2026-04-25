@@ -26,6 +26,8 @@ import {
   MIME_TYPES,
   useExcalidrawAPI,
 } from "@excalidraw/excalidraw";
+import { AIMTUTOR_AI_CHAT_TAB, DEFAULT_SIDEBAR } from "@excalidraw/common";
+import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 
 import type { DataURL } from "@excalidraw/excalidraw/types";
 import type { FileId } from "@excalidraw/element/types";
@@ -726,7 +728,6 @@ type AiSidebarChatContextValue = {
     inner: string;
     displayMode: boolean;
   }) => Promise<void>;
-  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   chatRootRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
   sidebarChatMode: SidebarChatMode;
@@ -1547,7 +1548,6 @@ export const AiSidebarChatProvider: React.FC<{
     onInsertCode,
     onCopyMath,
     onInsertMath,
-    onResizeStart,
     chatRootRef,
     listRef,
     sidebarChatMode,
@@ -1680,7 +1680,6 @@ export const AiSidebarChat: React.FC = () => {
     onInsertCode,
     onCopyMath,
     onInsertMath,
-    onResizeStart,
     chatRootRef,
     listRef,
     sidebarChatMode,
@@ -1694,6 +1693,10 @@ export const AiSidebarChat: React.FC = () => {
     ollamaModelsLoading,
   } = ctx;
   const { AiSidebarHeaderActionsTunnel } = useTunnels();
+  const appState = useUIAppState();
+  const shouldRenderHeaderActions =
+    appState.openSidebar?.name === DEFAULT_SIDEBAR.name &&
+    appState.openSidebar?.tab === AIMTUTOR_AI_CHAT_TAB;
 
   const onInsertReferenceImage = useCallback(
     async (image: SidebarChatImage) => {
@@ -1785,61 +1788,57 @@ export const AiSidebarChat: React.FC = () => {
 
   return (
     <>
-      <AiSidebarHeaderActionsTunnel.In>
-        <div className="aim-ai-sidebar-header-actions">
-          <div className="aim-ai-chat-mode-wrap">
-            <label className="aim-ai-chat-mode-label" htmlFor="aim-sidebar-chat-mode">
-              Mode
-            </label>
-            <select
-              id="aim-sidebar-chat-mode"
-              className="aim-ai-chat-mode-select"
-              value={sidebarChatMode}
-              onChange={(e) =>
-                setSidebarChatMode(e.target.value as SidebarChatMode)
-              }
-              aria-label="Assistant mode: images, topic with images, or chat"
-              disabled={loading}
-            >
-              <option value="images">Images</option>
-              <option value="topic_plus_images">Topic + images</option>
-              <option value="chat">Chat</option>
-            </select>
+      {shouldRenderHeaderActions && (
+        <AiSidebarHeaderActionsTunnel.In>
+          <div className="aim-ai-sidebar-header-actions">
+            <div className="aim-ai-chat-mode-wrap">
+              <label
+                className="aim-ai-chat-mode-label"
+                htmlFor="aim-sidebar-chat-mode"
+              >
+                Mode
+              </label>
+              <select
+                id="aim-sidebar-chat-mode"
+                className="aim-ai-chat-mode-select"
+                value={sidebarChatMode}
+                onChange={(e) =>
+                  setSidebarChatMode(e.target.value as SidebarChatMode)
+                }
+                aria-label="Assistant mode: images, topic with images, or chat"
+                disabled={loading}
+              >
+                <option value="images">Images</option>
+                <option value="topic_plus_images">Topic + images</option>
+                <option value="chat">Chat</option>
+              </select>
+            </div>
+            <Tooltip label={t("labels.aiChatHistory")}>
+              <Button
+                type="button"
+                onSelect={() => setHistoryOpen(true)}
+                className="sidebar__dock aim-ai-history"
+                data-testid="ai-sidebar-chat-history"
+                aria-label={t("labels.aiChatHistory")}
+              >
+                {historyIcon}
+              </Button>
+            </Tooltip>
+            <Tooltip label={t("labels.aiNewChat")}>
+              <Button
+                type="button"
+                onSelect={startNewChat}
+                className="sidebar__dock aim-ai-new-chat"
+                data-testid="ai-sidebar-new-chat"
+                aria-label={t("labels.aiNewChat")}
+              >
+                {PlusIcon}
+              </Button>
+            </Tooltip>
           </div>
-          <Tooltip label={t("labels.aiChatHistory")}>
-            <Button
-              type="button"
-              onSelect={() => setHistoryOpen(true)}
-              className="sidebar__dock aim-ai-history"
-              data-testid="ai-sidebar-chat-history"
-              aria-label={t("labels.aiChatHistory")}
-            >
-              {historyIcon}
-            </Button>
-          </Tooltip>
-          <Tooltip label={t("labels.aiNewChat")}>
-            <Button
-              type="button"
-              onSelect={startNewChat}
-              className="sidebar__dock aim-ai-new-chat"
-              data-testid="ai-sidebar-new-chat"
-              aria-label={t("labels.aiNewChat")}
-            >
-              {PlusIcon}
-            </Button>
-          </Tooltip>
-        </div>
-      </AiSidebarHeaderActionsTunnel.In>
+        </AiSidebarHeaderActionsTunnel.In>
+      )}
       <div ref={chatRootRef} className="aim-ai-chat">
-        <button
-          type="button"
-          className="aim-ai-chat__resize-handle"
-          onPointerDown={onResizeStart}
-          aria-label="Resize sidebar"
-          title="Drag to resize sidebar"
-        >
-          <span />
-        </button>
         {historyOpen && (
           <div
             className="aim-ai-chat__history-backdrop"
