@@ -36,11 +36,9 @@ import { getSelectedElements } from "../scene";
 
 import {
   useApp,
-  useAppProps,
   useExcalidrawElements,
   useExcalidrawSetAppState,
 } from "./App";
-import { LibraryMenuControlButtons } from "./LibraryMenuControlButtons";
 import LibraryMenuItems from "./LibraryMenuItems";
 import Spinner from "./Spinner";
 
@@ -49,7 +47,6 @@ import "./LibraryMenu.scss";
 import type {
   LibraryItems,
   LibraryItem,
-  ExcalidrawProps,
   UIAppState,
   AppClassProperties,
 } from "../types";
@@ -67,10 +64,7 @@ const LibraryMenuContent = memo(
     pendingElements,
     onAddToLibrary,
     setAppState,
-    libraryReturnUrl,
     library,
-    id,
-    theme,
     selectedItems,
     onSelectItems,
   }: {
@@ -78,10 +72,7 @@ const LibraryMenuContent = memo(
     onInsertLibraryItems: (libraryItems: LibraryItems) => void;
     onAddToLibrary: () => void;
     setAppState: React.Component<any, UIAppState>["setState"];
-    libraryReturnUrl: ExcalidrawProps["libraryReturnUrl"];
     library: Library;
-    id: string;
-    theme: UIAppState["theme"];
     selectedItems: LibraryItem["id"][];
     onSelectItems: (id: LibraryItem["id"][]) => void;
   }) => {
@@ -149,9 +140,6 @@ const LibraryMenuContent = memo(
           onAddToLibrary={_onAddToLibrary}
           onInsertLibraryItems={onInsertLibraryItems}
           pendingElements={pendingElements}
-          id={id}
-          libraryReturnUrl={libraryReturnUrl}
-          theme={theme}
           onSelectItems={onSelectItems}
           selectedItems={selectedItems}
         />
@@ -252,7 +240,6 @@ const usePendingElementsMemo = (
 export const LibraryMenu = memo(() => {
   const app = useApp();
   const { onInsertElements } = app;
-  const appProps = useAppProps();
   const appState = useUIAppState();
   const setAppState = useExcalidrawSetAppState();
   const [selectedItems, setSelectedItems] = useState<LibraryItem["id"][]>([]);
@@ -321,10 +308,7 @@ export const LibraryMenu = memo(() => {
       onInsertLibraryItems={onInsertLibraryItems}
       onAddToLibrary={deselectItems}
       setAppState={setAppState}
-      libraryReturnUrl={appProps.libraryReturnUrl}
       library={memoizedLibrary}
-      id={app.id}
-      theme={appState.theme}
       selectedItems={selectedItems}
       onSelectItems={setSelectedItems}
     />
