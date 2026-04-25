@@ -361,7 +361,7 @@ export default function LibraryMenuItems({
           className="library-menu-items-container__header"
           style={{ marginTop: "0.75rem" }}
         >
-          {t("labels.excalidrawLib")}
+          AimTutor Library
         </div>
       )}
       {publishedItems.length > 0 && (
